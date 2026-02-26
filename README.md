@@ -2,6 +2,32 @@
 
 A full-stack S&OP platform built with **FastAPI** (Python) + **React** (TypeScript), applying **SOLID principles** and **GoF Design Patterns** throughout.
 
+## 📚 Architecture Documentation
+
+If you’re new to the codebase, start here:
+
+- **Architecture index:** [`docs/architecture/README.md`](docs/architecture/README.md)
+- **System Context (C4 L1):** [`docs/architecture/system-context.md`](docs/architecture/system-context.md)
+- **Container Diagram (C4 L2):** [`docs/architecture/container.md`](docs/architecture/container.md)
+- **Backend Architecture:** [`docs/architecture/backend.md`](docs/architecture/backend.md)
+- **Frontend Architecture:** [`docs/architecture/frontend.md`](docs/architecture/frontend.md)
+- **Data Model:** [`docs/architecture/data-model.md`](docs/architecture/data-model.md)
+- **Runtime & Deployment:** [`docs/architecture/runtime-deployment.md`](docs/architecture/runtime-deployment.md)
+- **Cross-cutting Concerns:** [`docs/architecture/cross-cutting.md`](docs/architecture/cross-cutting.md)
+- **ADRs:** [`docs/adr/README.md`](docs/adr/README.md)
+- **C4 L3 Components (Forecasting):** [`docs/architecture/components-forecasting.md`](docs/architecture/components-forecasting.md)
+
+## 🧭 How to use GenXSOP
+
+- **User Guide (UI walkthrough):** [`docs/user-guide.md`](docs/user-guide.md)
+- **Developer / API Guide:** [`docs/api-guide.md`](docs/api-guide.md)
+- **Docs index:** [`docs/README.md`](docs/README.md)
+
+## 🧰 API tooling
+
+- **Postman collection:** [`docs/postman/GenXSOP.postman_collection.json`](docs/postman/GenXSOP.postman_collection.json)
+- **Postman environment:** [`docs/postman/GenXSOP.postman_environment.json`](docs/postman/GenXSOP.postman_environment.json)
+
 ---
 
 ## 🏗️ Architecture Overview
