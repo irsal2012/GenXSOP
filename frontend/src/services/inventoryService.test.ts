@@ -19,7 +19,7 @@ describe('inventoryService (normalization)', () => {
   })
 
   it('getInventory coerces Decimal-like string fields to numbers (paginated response)', async () => {
-    ;(api.get as any).mockResolvedValue({
+    (api.get as any).mockResolvedValue({
       data: {
         items: [
           {
@@ -54,7 +54,7 @@ describe('inventoryService (normalization)', () => {
   })
 
   it('getInventory normalizes array response to PaginatedResponse and coerces numeric strings', async () => {
-    ;(api.get as any).mockResolvedValue({
+    (api.get as any).mockResolvedValue({
       data: [
         {
           id: 2,

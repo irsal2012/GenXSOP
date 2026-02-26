@@ -9,6 +9,8 @@ import { SkeletonCard } from '@/components/common/LoadingSpinner'
 import { formatPeriod, formatDate } from '@/utils/formatters'
 import type { SOPCycle, CreateSOPCycleRequest, SOPStepStatus } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const STEP_NAMES = [
   'Data Gathering',
@@ -39,6 +41,9 @@ function StepIndicator({ step, status, current }: { step: number; status: SOPSte
 }
 
 export function SOPCyclePage() {
+  const { user } = useAuthStore()
+  const canManage = can(user?.role, 'sop.manage')
+
   const [cycles, setCycles] = useState<SOPCycle[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -97,9 +102,11 @@ export function SOPCyclePage() {
           <h1 className="text-xl font-bold text-gray-900">S&OP Cycles</h1>
           <p className="text-sm text-gray-500 mt-0.5">{total} cycles total</p>
         </div>
-        <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
-          New Cycle
-        </Button>
+        {canManage && (
+          <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
+            New Cycle
+          </Button>
+        )}
       </div>
 
       {loading ? (
@@ -123,6 +130,7 @@ export function SOPCyclePage() {
                   <StatusBadge status={cycle.overall_status} size="sm" />
                   {cycle.overall_status === 'active' && (
                     <Button size="sm" variant="secondary" icon={<ChevronRight />}
+                      disabled={!canManage}
                       loading={advancingId === cycle.id}
                       onClick={() => handleAdvance(cycle.id)}>
                       Advance
@@ -178,7 +186,7 @@ export function SOPCyclePage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate}>Create Cycle</Button>
+            <Button onClick={handleCreate} disabled={!canManage}>Create Cycle</Button>
           </>
         }
       >

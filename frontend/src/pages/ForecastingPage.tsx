@@ -9,6 +9,8 @@ import { SkeletonTable } from '@/components/common/LoadingSpinner'
 import { formatPeriod, formatNumber, formatPercent } from '@/utils/formatters'
 import type { Forecast, ForecastAccuracy, GenerateForecastRequest } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const MODEL_TYPES = [
   { value: 'moving_average', label: 'Moving Average' },
@@ -19,6 +21,9 @@ const MODEL_TYPES = [
 ]
 
 export function ForecastingPage() {
+  const { user } = useAuthStore()
+  const canGenerate = can(user?.role, 'forecast.generate')
+
   const [forecasts, setForecasts] = useState<Forecast[]>([])
   const [accuracy, setAccuracy] = useState<ForecastAccuracy[]>([])
   const [loading, setLoading] = useState(true)
@@ -80,9 +85,11 @@ export function ForecastingPage() {
           <h1 className="text-xl font-bold text-gray-900">AI Forecasting</h1>
           <p className="text-sm text-gray-500 mt-0.5">ML-powered demand forecasting</p>
         </div>
-        <Button icon={<Play />} onClick={() => setShowGenerate(true)}>
-          Generate Forecast
-        </Button>
+        {canGenerate && (
+          <Button icon={<Play />} onClick={() => setShowGenerate(true)}>
+            Generate Forecast
+          </Button>
+        )}
       </div>
 
       {/* KPI row */}
@@ -188,7 +195,7 @@ export function ForecastingPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setShowGenerate(false)}>Cancel</Button>
-            <Button loading={generating} onClick={handleGenerate} icon={<Brain />}>
+            <Button loading={generating} onClick={handleGenerate} icon={<Brain />} disabled={!canGenerate}>
               Generate
             </Button>
           </>

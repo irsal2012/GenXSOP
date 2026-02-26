@@ -9,6 +9,8 @@ import { SkeletonCard } from '@/components/common/LoadingSpinner'
 import { formatCurrency, formatPercent, formatDate } from '@/utils/formatters'
 import type { Scenario, CreateScenarioRequest } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const SCENARIO_TYPES = [
   { value: 'what_if', label: 'What-If Analysis' },
@@ -18,6 +20,10 @@ const SCENARIO_TYPES = [
 ]
 
 export function ScenariosPage() {
+  const { user } = useAuthStore()
+  const canWrite = can(user?.role, 'scenario.write')
+  const canApprove = can(user?.role, 'scenario.approve')
+
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -104,9 +110,11 @@ export function ScenariosPage() {
           <h1 className="text-xl font-bold text-gray-900">Scenario Planning</h1>
           <p className="text-sm text-gray-500 mt-0.5">{total} scenarios</p>
         </div>
-        <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
-          New Scenario
-        </Button>
+        {canWrite && (
+          <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
+            New Scenario
+          </Button>
+        )}
       </div>
 
       {loading ? (
@@ -169,14 +177,14 @@ export function ScenariosPage() {
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
-                {scenario.status === 'draft' && (
+                {canWrite && scenario.status === 'draft' && (
                   <Button size="sm" variant="secondary" icon={<Play />}
                     loading={actionLoading === scenario.id}
                     onClick={() => handleRun(scenario.id)}>
                     Run
                   </Button>
                 )}
-                {scenario.status === 'submitted' && (
+                {canApprove && scenario.status === 'submitted' && (
                   <>
                     <Button size="sm" variant="secondary" icon={<CheckCircle />}
                       loading={actionLoading === scenario.id}
@@ -199,7 +207,7 @@ export function ScenariosPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate}>Create Scenario</Button>
+            <Button onClick={handleCreate} disabled={!canWrite}>Create Scenario</Button>
           </>
         }
       >

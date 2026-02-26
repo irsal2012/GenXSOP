@@ -9,10 +9,16 @@ import { SkeletonTable } from '@/components/common/LoadingSpinner'
 import { formatPeriod, formatNumber } from '@/utils/formatters'
 import type { SupplyPlan, CreateSupplyPlanRequest } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const STATUSES = ['', 'draft', 'submitted', 'approved', 'rejected', 'locked']
 
 export function SupplyPage() {
+  const { user } = useAuthStore()
+  const canWrite = can(user?.role, 'supply.plan.write')
+  const canApprove = can(user?.role, 'supply.plan.approve')
+
   const [plans, setPlans] = useState<SupplyPlan[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -74,9 +80,11 @@ export function SupplyPage() {
           <h1 className="text-xl font-bold text-gray-900">Supply Planning</h1>
           <p className="text-sm text-gray-500 mt-0.5">{total} plans total</p>
         </div>
-        <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
-          New Plan
-        </Button>
+        {canWrite && (
+          <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
+            New Plan
+          </Button>
+        )}
       </div>
 
       <Card padding={false}>
@@ -132,13 +140,13 @@ export function SupplyPage() {
                     <td className="px-4 py-3"><StatusBadge status={plan.status} size="sm" /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        {plan.status === 'draft' && (
+                        {canWrite && plan.status === 'draft' && (
                           <button onClick={() => handleAction(plan.id, 'submit')} disabled={actionLoading === plan.id}
                             className="p-1.5 rounded text-blue-600 hover:bg-blue-50 transition-colors" title="Submit">
                             <Send className="h-3.5 w-3.5" />
                           </button>
                         )}
-                        {plan.status === 'submitted' && (
+                        {canApprove && plan.status === 'submitted' && (
                           <>
                             <button onClick={() => handleAction(plan.id, 'approve')} disabled={actionLoading === plan.id}
                               className="p-1.5 rounded text-emerald-600 hover:bg-emerald-50 transition-colors" title="Approve">
@@ -178,7 +186,7 @@ export function SupplyPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate}>Create Plan</Button>
+            <Button onClick={handleCreate} disabled={!canWrite}>Create Plan</Button>
           </>
         }
       >

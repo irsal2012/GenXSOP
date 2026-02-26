@@ -9,10 +9,15 @@ import { SkeletonTable } from '@/components/common/LoadingSpinner'
 import { formatCurrency } from '@/utils/formatters'
 import type { Product, CreateProductRequest } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const STATUSES = ['', 'active', 'discontinued', 'new']
 
 export function ProductsPage() {
+  const { user } = useAuthStore()
+  const canManage = can(user?.role, 'products.manage')
+
   const [products, setProducts] = useState<Product[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -105,9 +110,11 @@ export function ProductsPage() {
           <h1 className="text-xl font-bold text-gray-900">Products</h1>
           <p className="text-sm text-gray-500 mt-0.5">{total} products</p>
         </div>
-        <Button icon={<Plus />} onClick={() => { setEditProduct(null); setShowCreate(true) }}>
-          Add Product
-        </Button>
+        {canManage && (
+          <Button icon={<Plus />} onClick={() => { setEditProduct(null); setShowCreate(true) }}>
+            Add Product
+          </Button>
+        )}
       </div>
 
       <Card padding={false}>
@@ -167,20 +174,24 @@ export function ProductsPage() {
                     <td className="px-4 py-3"><StatusBadge status={product.status} size="sm" /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleEdit(product)}
-                          className="p-1.5 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                          title="Edit"
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(product.id)}
-                          className="p-1.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        {canManage && (
+                          <>
+                            <button
+                              onClick={() => handleEdit(product)}
+                              className="p-1.5 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                              title="Edit"
+                            >
+                              <Edit2 className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(product.id)}
+                              className="p-1.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -215,7 +226,7 @@ export function ProductsPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => { setShowCreate(false); setEditProduct(null) }}>Cancel</Button>
-            <Button onClick={handleCreate}>{editProduct ? 'Save Changes' : 'Create Product'}</Button>
+            <Button onClick={handleCreate} disabled={!canManage}>{editProduct ? 'Save Changes' : 'Create Product'}</Button>
           </>
         }
       >

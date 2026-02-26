@@ -4,6 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { useAuthStore } from '@/store/authStore'
+import { RequireModule } from '@/auth/RequireModule'
 
 // Lazy-loaded pages
 const LoginPage      = lazy(() => import('@/pages/LoginPage').then((m) => ({ default: m.LoginPage })))
@@ -59,15 +60,35 @@ export function App() {
           {/* Protected */}
           <Route element={<AppLayout />}>
             <Route path="/" element={<DashboardPage />} />
-            <Route path="/demand" element={<DemandPage />} />
-            <Route path="/supply" element={<SupplyPage />} />
-            <Route path="/inventory" element={<InventoryPage />} />
-            <Route path="/forecasting" element={<ForecastingPage />} />
-            <Route path="/scenarios" element={<ScenariosPage />} />
-            <Route path="/sop-cycle" element={<SOPCyclePage />} />
-            <Route path="/kpi" element={<KPIPage />} />
-            <Route path="/products" element={<ProductsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+
+            {/* Module guards */}
+            <Route element={<RequireModule module="demand" />}>
+              <Route path="/demand" element={<DemandPage />} />
+            </Route>
+            <Route element={<RequireModule module="supply" />}>
+              <Route path="/supply" element={<SupplyPage />} />
+            </Route>
+            <Route element={<RequireModule module="inventory" />}>
+              <Route path="/inventory" element={<InventoryPage />} />
+            </Route>
+            <Route element={<RequireModule module="forecasting" />}>
+              <Route path="/forecasting" element={<ForecastingPage />} />
+            </Route>
+            <Route element={<RequireModule module="scenarios" />}>
+              <Route path="/scenarios" element={<ScenariosPage />} />
+            </Route>
+            <Route element={<RequireModule module="sop_cycle" />}>
+              <Route path="/sop-cycle" element={<SOPCyclePage />} />
+            </Route>
+            <Route element={<RequireModule module="kpi" />}>
+              <Route path="/kpi" element={<KPIPage />} />
+            </Route>
+            <Route element={<RequireModule module="products" />}>
+              <Route path="/products" element={<ProductsPage />} />
+            </Route>
+            <Route element={<RequireModule module="settings" />}>
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
           </Route>
 
           {/* Fallback */}

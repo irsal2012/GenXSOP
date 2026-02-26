@@ -8,6 +8,8 @@ import { SkeletonCard } from '@/components/common/LoadingSpinner'
 import { formatPercent, formatNumber, formatPeriod } from '@/utils/formatters'
 import type { KPIMetric, CreateKPIRequest, KPICategory } from '@/types'
 import toast from 'react-hot-toast'
+import { useAuthStore } from '@/store/authStore'
+import { can } from '@/auth/permissions'
 
 const CATEGORIES: KPICategory[] = ['demand', 'supply', 'inventory', 'financial', 'service']
 
@@ -20,6 +22,9 @@ const categoryColor: Record<KPICategory, string> = {
 }
 
 export function KPIPage() {
+  const { user } = useAuthStore()
+  const canManage = can(user?.role, 'kpi.manage')
+
   const [metrics, setMetrics] = useState<KPIMetric[]>([])
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState<string>('')
@@ -93,9 +98,11 @@ export function KPIPage() {
           <h1 className="text-xl font-bold text-gray-900">KPI Dashboard</h1>
           <p className="text-sm text-gray-500 mt-0.5">{metrics.length} metrics tracked</p>
         </div>
-        <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
-          Record KPI
-        </Button>
+        {canManage && (
+          <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
+            Record KPI
+          </Button>
+        )}
       </div>
 
       {/* Category filter */}
@@ -211,7 +218,7 @@ export function KPIPage() {
         footer={
           <>
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate}>Record</Button>
+            <Button onClick={handleCreate} disabled={!canManage}>Record</Button>
           </>
         }
       >

@@ -7,22 +7,28 @@ import {
   Zap,
 } from 'lucide-react'
 import { useUIStore } from '@/store/uiStore'
+import { useAuthStore } from '@/store/authStore'
+import type { AppModule } from '@/auth/permissions'
+import { canAccessModule } from '@/auth/permissions'
 
-const navItems = [
-  { to: '/',            label: 'Dashboard',       icon: LayoutDashboard, end: true },
-  { to: '/demand',      label: 'Demand Planning',  icon: TrendingUp },
-  { to: '/supply',      label: 'Supply Planning',  icon: Factory },
-  { to: '/inventory',   label: 'Inventory',        icon: Package },
-  { to: '/forecasting', label: 'Forecasting',      icon: Brain },
-  { to: '/scenarios',   label: 'Scenarios',        icon: GitBranch },
-  { to: '/sop-cycle',   label: 'S&OP Cycle',       icon: ClipboardList },
-  { to: '/kpi',         label: 'KPI Dashboard',    icon: BarChart3 },
-  { to: '/products',    label: 'Products',         icon: ShoppingBag },
-  { to: '/settings',    label: 'Settings',         icon: Settings },
+const navItems: Array<{ to: string; label: string; icon: any; end?: boolean; module: AppModule }> = [
+  { to: '/',            label: 'Dashboard',        icon: LayoutDashboard, end: true, module: 'dashboard' },
+  { to: '/demand',      label: 'Demand Planning',  icon: TrendingUp, module: 'demand' },
+  { to: '/supply',      label: 'Supply Planning',  icon: Factory, module: 'supply' },
+  { to: '/inventory',   label: 'Inventory',        icon: Package, module: 'inventory' },
+  { to: '/forecasting', label: 'Forecasting',      icon: Brain, module: 'forecasting' },
+  { to: '/scenarios',   label: 'Scenarios',        icon: GitBranch, module: 'scenarios' },
+  { to: '/sop-cycle',   label: 'S&OP Cycle',       icon: ClipboardList, module: 'sop_cycle' },
+  { to: '/kpi',         label: 'KPI Dashboard',    icon: BarChart3, module: 'kpi' },
+  { to: '/products',    label: 'Products',         icon: ShoppingBag, module: 'products' },
+  { to: '/settings',    label: 'Settings',         icon: Settings, module: 'settings' },
 ]
 
 export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUIStore()
+  const { user } = useAuthStore()
+
+  const visibleItems = navItems.filter((i) => canAccessModule(user?.role, i.module))
 
   return (
     <aside
@@ -59,7 +65,7 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 py-4 overflow-y-auto scrollbar-thin">
         <ul className="space-y-0.5 px-2">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
+          {visibleItems.map(({ to, label, icon: Icon, end }) => (
             <li key={to}>
               <NavLink
                 to={to}
