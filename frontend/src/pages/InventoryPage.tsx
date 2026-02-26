@@ -115,11 +115,19 @@ export function InventoryPage() {
                     <td className="px-4 py-3 tabular-nums text-gray-600">{formatNumber(item.in_transit_qty)}</td>
                     <td className="px-4 py-3 tabular-nums text-gray-600">{formatNumber(item.safety_stock)}</td>
                     <td className="px-4 py-3 tabular-nums">
-                      {item.days_of_supply != null ? (
-                        <span className={item.days_of_supply < 7 ? 'text-red-600 font-medium' : item.days_of_supply < 14 ? 'text-amber-600' : 'text-gray-900'}>
-                          {item.days_of_supply.toFixed(0)}d
-                        </span>
-                      ) : '—'}
+                      {(() => {
+                        // Defensive: backend decimals may arrive as strings; avoid crashing the page.
+                        const raw: any = (item as any).days_of_supply
+                        const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : undefined
+
+                        if (n === undefined || Number.isNaN(n)) return '—'
+
+                        return (
+                          <span className={n < 7 ? 'text-red-600 font-medium' : n < 14 ? 'text-amber-600' : 'text-gray-900'}>
+                            {n.toFixed(0)}d
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3"><StatusBadge status={item.status} size="sm" /></td>
                   </tr>
