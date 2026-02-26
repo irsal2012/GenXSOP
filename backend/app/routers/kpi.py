@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import date
+from math import ceil
 
 from app.database import get_db
 from app.models.user import User
@@ -21,15 +22,30 @@ def get_kpi_service(db: Session = Depends(get_db)) -> KPIService:
     return KPIService(db)
 
 
-@router.get("/metrics", response_model=List[KPIMetricResponse])
+@router.get("/metrics", response_model=KPIMetricListResponse)
 def list_kpi_metrics(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     category: Optional[str] = None,
     period_from: Optional[date] = None,
     period_to: Optional[date] = None,
     service: KPIService = Depends(get_kpi_service),
     _: User = Depends(get_current_user),
 ):
-    return service.list_metrics(category=category, period_from=period_from, period_to=period_to)
+    # NOTE: We return a paginated contract (items/total/page/page_size/total_pages)
+    # to match the frontend's PaginatedResponse<T> pattern.
+    items_all = service.list_metrics(category=category, period_from=period_from, period_to=period_to)
+    total = len(items_all)
+    start = (page - 1) * page_size
+    end = start + page_size
+    items = items_all[start:end]
+    return KPIMetricListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=ceil(total / page_size) if total else 0,
+    )
 
 
 @router.post("/metrics", response_model=KPIMetricResponse, status_code=201)

@@ -35,9 +35,12 @@ export function KPIPage() {
         page_size: 100,
         category: activeCategory || undefined,
       })
-      setMetrics(res.items)
-    } catch {
-      // handled
+      // Defensive: never allow metrics to become undefined (would crash render)
+      setMetrics(Array.isArray(res.items) ? res.items : [])
+    } catch (e) {
+      console.error('Failed to load KPI metrics', e)
+      toast.error('Failed to load KPI metrics')
+      setMetrics([])
     } finally {
       setLoading(false)
     }
@@ -65,6 +68,17 @@ export function KPIPage() {
     if (trend === 'improving') return <TrendingUp className="h-4 w-4 text-emerald-500" />
     if (trend === 'declining') return <TrendingDown className="h-4 w-4 text-red-500" />
     return <Minus className="h-4 w-4 text-gray-400" />
+  }
+
+  // Extra guard: if backend returns Decimal fields as strings, avoid crashing
+  // formatting helpers (toFixed) in the UI.
+  const asNumber = (v: unknown): number => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
+    return 0
   }
 
   const grouped = CATEGORIES.reduce((acc, cat) => {
@@ -128,7 +142,9 @@ export function KPIPage() {
                 <h2 className="text-sm font-semibold text-gray-700 capitalize mb-3">{cat} KPIs</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {catMetrics.map((metric) => {
-                    const achievementPct = metric.target ? (metric.value / metric.target) * 100 : null
+                    const valueNum = asNumber(metric.value)
+                    const targetNum = metric.target != null ? asNumber(metric.target) : undefined
+                    const achievementPct = targetNum ? (valueNum / targetNum) * 100 : null
                     return (
                       <div key={metric.id} className="bg-white rounded-xl border border-gray-100 p-5">
                         <div className="flex items-start justify-between mb-3">
@@ -146,14 +162,14 @@ export function KPIPage() {
                         <div className="flex items-end justify-between mb-3">
                           <div>
                             <p className="text-2xl font-bold text-gray-900 tabular-nums">
-                              {metric.unit === '%' ? formatPercent(metric.value) : formatNumber(metric.value)}
+                              {metric.unit === '%' ? formatPercent(valueNum) : formatNumber(valueNum)}
                               {metric.unit && metric.unit !== '%' && (
                                 <span className="text-sm font-normal text-gray-500 ml-1">{metric.unit}</span>
                               )}
                             </p>
-                            {metric.target && (
+                            {targetNum != null && (
                               <p className="text-xs text-gray-500 mt-0.5">
-                                Target: {metric.unit === '%' ? formatPercent(metric.target) : formatNumber(metric.target)}
+                                Target: {metric.unit === '%' ? formatPercent(targetNum) : formatNumber(targetNum)}
                               </p>
                             )}
                           </div>

@@ -32,6 +32,9 @@ class KPIMetricResponse(KPIMetricBase):
 class KPIMetricListResponse(BaseModel):
     items: List[KPIMetricResponse]
     total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 class KPIDashboardData(BaseModel):
