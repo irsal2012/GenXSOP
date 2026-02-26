@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { User, Lock, Bell, Palette } from 'lucide-react'
+import { User, Lock, Palette } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { authService } from '@/services/authService'

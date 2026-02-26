@@ -21,7 +21,6 @@ const STEP_NAMES = [
 function StepIndicator({ step, status, current }: { step: number; status: SOPStepStatus; current: number }) {
   const isActive = step === current
   const isDone = status === 'completed'
-  const isPending = status === 'pending'
 
   return (
     <div className={`flex items-center gap-2 ${isActive ? 'text-blue-600' : isDone ? 'text-emerald-600' : 'text-gray-400'}`}>

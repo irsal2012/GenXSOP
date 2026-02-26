@@ -6,7 +6,7 @@ import { Button } from '@/components/common/Button'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { Modal } from '@/components/common/Modal'
 import { SkeletonTable } from '@/components/common/LoadingSpinner'
-import { formatPeriod, formatNumber, formatDate } from '@/utils/formatters'
+import { formatPeriod, formatNumber } from '@/utils/formatters'
 import type { DemandPlan, CreateDemandPlanRequest } from '@/types'
 import toast from 'react-hot-toast'
 

@@ -6,7 +6,7 @@ import { Button } from '@/components/common/Button'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { Modal } from '@/components/common/Modal'
 import { SkeletonTable } from '@/components/common/LoadingSpinner'
-import { formatCurrency, formatDate } from '@/utils/formatters'
+import { formatCurrency } from '@/utils/formatters'
 import type { Product, CreateProductRequest } from '@/types'
 import toast from 'react-hot-toast'
 

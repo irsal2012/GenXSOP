@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  TrendingUp, Factory, Package, BarChart3,
+  TrendingUp, Package, BarChart3,
   AlertTriangle, CheckCircle, Clock, ArrowRight,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'

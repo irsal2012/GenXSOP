@@ -34,7 +34,7 @@ export function App() {
     if (!isAuthenticated) {
       fetchMe()
     }
-  }, [])
+  }, [fetchMe, isAuthenticated])
 
   return (
     <BrowserRouter>

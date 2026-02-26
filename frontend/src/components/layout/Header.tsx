@@ -4,7 +4,6 @@ import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
 import { formatRole } from '@/utils/formatters'
 import { getUserInitial } from '@/utils/user'
-import { clsx } from 'clsx'
 
 export function Header() {
   const { user, logout } = useAuthStore()
