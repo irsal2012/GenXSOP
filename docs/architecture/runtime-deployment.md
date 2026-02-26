@@ -14,8 +14,8 @@ This document describes how GenXSOP runs locally and how it is expected to be de
 
 ```mermaid
 flowchart LR
-  Browser[Browser\nhttp://localhost:5173] -->|Vite dev server| Vite[Vite]
-  Vite -->|/api proxy| API[FastAPI\nhttp://localhost:8000]
+  Browser["Browser<br/>http://localhost:5173"] -->|Vite dev server| Vite[Vite]
+  Vite -->|/api proxy| API["FastAPI<br/>http://localhost:8000"]
   API --> DB[(SQLite file or Postgres)]
 ```
 
@@ -52,10 +52,10 @@ The design document suggests a typical deployment:
 
 ```mermaid
 flowchart TB
-  Internet((Internet)) --> LB[Nginx / Load Balancer\n:443]
-  LB --> SPA[Static Frontend\nReact build]
-  LB --> API[Backend API\nUvicorn + FastAPI\n:8000]
-  API --> DB[(PostgreSQL\n:5432)]
+  Internet((Internet)) --> LB["Nginx / Load Balancer<br/>:443"]
+  LB --> SPA["Static Frontend<br/>React build"]
+  LB --> API["Backend API<br/>Uvicorn + FastAPI<br/>:8000"]
+  API --> DB[("PostgreSQL<br/>:5432")]
 ```
 
 ## Configuration

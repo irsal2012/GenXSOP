@@ -27,14 +27,14 @@ The intended dependency direction:
 
 ```mermaid
 flowchart TB
-  Router[routers/*\nHTTP layer] --> Service[services/*\nBusiness logic]
-  Service --> Repo[repositories/*\nData access]
-  Repo --> ORM[models/*\nSQLAlchemy ORM]
+  Router["routers/*<br/>HTTP layer"] --> Service["services/*<br/>Business logic"]
+  Service --> Repo["repositories/*<br/>Data access"]
+  Repo --> ORM["models/*<br/>SQLAlchemy ORM"]
 
-  Router --> Schemas[schemas/*\nPydantic DTOs]
+  Router --> Schemas["schemas/*<br/>Pydantic DTOs"]
   Service --> Schemas
-  Service --> ML[ml/*\nStrategy/Factory]
-  Service --> Events[utils/events.py\nEventBus]
+  Service --> ML["ml/*<br/>Strategy/Factory"]
+  Service --> Events["utils/events.py<br/>EventBus"]
 
   ORM --> DB[(Database)]
 ```

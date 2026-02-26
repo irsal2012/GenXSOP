@@ -4,22 +4,24 @@ GenXSOP is a classic **SPA + API + DB** architecture.
 
 ## Diagram
 
+> Note: GitHub-flavored Mermaid is stricter than some Mermaid renderers. For multi-line labels in flowcharts, prefer quoted labels with `<br/>` (instead of `\n`).
+
 ```mermaid
 flowchart TB
   subgraph UserDevice[User device]
-    Browser[Browser\nReact SPA (Vite)]
+    Browser["Browser<br/>React SPA (Vite)"]
   end
 
   subgraph Server[Application server]
-    API[FastAPI API\nPython 3.11]
+    API["FastAPI API<br/>Python 3.11"]
   end
 
   subgraph Data[Data layer]
     DB[(SQLite / PostgreSQL)]
   end
 
-  Browser -->|HTTPS / JSON\nAuthorization: Bearer JWT| API
-  API -->|SQLAlchemy ORM\n(Alembic for migrations)| DB
+  Browser -->|"HTTPS / JSON<br/>Authorization: Bearer JWT"| API
+  API -->|"SQLAlchemy ORM<br/>(Alembic for migrations)"| DB
 ```
 
 ## Responsibilities by container

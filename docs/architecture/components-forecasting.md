@@ -9,33 +9,33 @@ This document zooms into the **Forecasting** domain and shows the major backend 
 ```mermaid
 flowchart TB
   %% External
-  SPA[React SPA]\n
+  SPA["React SPA"]
   %% API layer
   subgraph API[FastAPI API]
-    FR[routers/forecasting.py\nForecasting Router]
-    DEP[dependencies.py\nget_current_user + require_roles]
+    FR["routers/forecasting.py<br/>Forecasting Router"]
+    DEP["dependencies.py<br/>get_current_user + require_roles"]
   end
 
   %% Domain/service layer
   subgraph Domain[Forecasting domain]
-    FS[services/forecast_service.py\nForecastService]
-    DPR[repositories/demand_repository.py\nDemandPlanRepository]
-    FOR[repositories/forecast_repository.py\nForecastRepository]
+    FS["services/forecast_service.py<br/>ForecastService"]
+    DPR["repositories/demand_repository.py<br/>DemandPlanRepository"]
+    FOR["repositories/forecast_repository.py<br/>ForecastRepository"]
   end
 
   %% ML engine
   subgraph ML[ML Engine]
-    FFactory[ml/factory.py\nForecastModelFactory]
-    FContext[ml/strategies.py\nForecastContext]
+    FFactory["ml/factory.py<br/>ForecastModelFactory"]
+    FContext["ml/strategies.py<br/>ForecastContext"]
     MAS[MovingAverageStrategy]
     ESS[ExponentialSmoothingStrategy]
     PS[ProphetStrategy]
-    AD[ml/anomaly_detection.py\nAnomalyDetector]
+    AD["ml/anomaly_detection.py<br/>AnomalyDetector"]
   end
 
   %% Cross-cutting
   subgraph XCut[Cross-cutting]
-    BUS[utils/events.py\nEventBus]
+    BUS["utils/events.py<br/>EventBus"]
     AUD[AuditLogHandler]
     LOG[LoggingHandler]
   end

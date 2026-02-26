@@ -25,18 +25,18 @@ frontend/src/
 ```mermaid
 flowchart LR
   App[App.tsx] --> Router[react-router-dom]
-  Router --> Public[/login\nLoginPage/]
+  Router --> Public["/login<br/>LoginPage"]
   Router --> Layout[AppLayout]
-  Layout --> Dash[/\nDashboardPage/]
-  Layout --> Demand[/demand\nDemandPage/]
-  Layout --> Supply[/supply\nSupplyPage/]
-  Layout --> Inv[/inventory\nInventoryPage/]
-  Layout --> Fcst[/forecasting\nForecastingPage/]
-  Layout --> Scen[/scenarios\nScenariosPage/]
-  Layout --> SOP[/sop-cycle\nSOPCyclePage/]
-  Layout --> KPI[/kpi\nKPIPage/]
-  Layout --> Prod[/products\nProductsPage/]
-  Layout --> Settings[/settings\nSettingsPage/]
+  Layout --> Dash["/<br/>DashboardPage"]
+  Layout --> Demand["/demand<br/>DemandPage"]
+  Layout --> Supply["/supply<br/>SupplyPage"]
+  Layout --> Inv["/inventory<br/>InventoryPage"]
+  Layout --> Fcst["/forecasting<br/>ForecastingPage"]
+  Layout --> Scen["/scenarios<br/>ScenariosPage"]
+  Layout --> SOP["/sop-cycle<br/>SOPCyclePage"]
+  Layout --> KPI["/kpi<br/>KPIPage"]
+  Layout --> Prod["/products<br/>ProductsPage"]
+  Layout --> Settings["/settings<br/>SettingsPage"]
 ```
 
 ## State management (Zustand)

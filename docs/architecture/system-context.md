@@ -37,16 +37,16 @@ flowchart LR
   Admin[Admin]
 
   %% System
-  System[GenXSOP\n(S&OP Planning Platform)]
+  System["GenXSOP<br/>(S&OP Planning Platform)"]
 
   %% External
-  DB[(Relational DB\nSQLite/Postgres)]
+  DB[("Relational DB<br/>SQLite/Postgres")]
   Browser[Web Browser]
 
-  Exec -->|review KPIs\napprove plans| Browser
+  Exec -->|"review KPIs<br/>approve plans"| Browser
   Coord -->|manage S&OP cycles| Browser
-  Demand -->|demand plans\nrun forecasts| Browser
-  Supply -->|supply plans\ncapacity| Browser
+  Demand -->|"demand plans<br/>run forecasts"| Browser
+  Supply -->|"supply plans<br/>capacity"| Browser
   Inv -->|inventory health| Browser
   Fin -->|what-if scenarios| Browser
   Admin -->|users, products| Browser
