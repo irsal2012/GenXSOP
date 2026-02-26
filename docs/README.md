@@ -5,6 +5,11 @@ Welcome to the GenXSOP docs.
 ## Start here
 
 - **User Guide (UI walkthrough):** [`user-guide.md`](user-guide.md)
+- **Business Overview:** [`business-overview.md`](business-overview.md)
+- **Role Playbooks:** [`role-playbooks.md`](role-playbooks.md)
+- **Integration scenarios (ERP/WMS):** [`integration/erp-wms-integration.md`](integration/erp-wms-integration.md)
+- **Publish readiness (weekly + monthly):** [`integration/publish-readiness.md`](integration/publish-readiness.md)
+- **Conversation scenario map:** [`conversation-scenarios.md`](conversation-scenarios.md)
 - **Developer / API Guide:** [`api-guide.md`](api-guide.md)
 - **Architecture docs (C4 + more):** [`architecture/README.md`](architecture/README.md)
 - **Architecture Decision Records (ADRs):** [`adr/README.md`](adr/README.md)
