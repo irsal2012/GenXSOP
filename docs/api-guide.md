@@ -194,6 +194,15 @@ curl -s "http://localhost:8000/api/v1/forecasting/models" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+Current model catalog includes:
+
+- `moving_average`
+- `ewma`
+- `exp_smoothing`
+- `seasonal_naive`
+- `arima`
+- `prophet`
+
 Generate:
 
 ```bash
@@ -207,6 +216,83 @@ Generate with specific model:
 curl -s -X POST "http://localhost:8000/api/v1/forecasting/generate?product_id=1&horizon=6&model_type=prophet" \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+Async generate (enterprise transition pattern):
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/forecasting/generate-job?product_id=1&horizon=6&model_type=prophet" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Example response shape:
+
+```json
+{
+  "job_id": "8d2f...",
+  "status": "queued",
+  "product_id": 1,
+  "horizon": 6,
+  "model_type": "prophet",
+  "requested_by": 1,
+  "created_at": "2026-02-27T00:00:00.000000"
+}
+```
+
+Get async job status/result:
+
+```bash
+JOB_ID="<job_id_from_generate_job>"
+
+curl -s "http://localhost:8000/api/v1/forecasting/jobs/$JOB_ID" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+List recent jobs:
+
+```bash
+curl -s "http://localhost:8000/api/v1/forecasting/jobs?limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Cancel a job:
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/forecasting/jobs/$JOB_ID/cancel" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Retry a failed/cancelled job (returns new queued job):
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/forecasting/jobs/$JOB_ID/retry" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Get job operational metrics:
+
+```bash
+curl -s "http://localhost:8000/api/v1/forecasting/jobs/metrics" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Example fields:
+
+- `total_jobs`
+- `by_status` (`queued`, `running`, `completed`, `failed`, `cancelled`)
+- `avg_processing_time_ms`
+- `failed_last_24h`
+- `oldest_queued_age_seconds`
+
+Cleanup old jobs (ops roles only):
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/forecasting/jobs/cleanup?retention_days=30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+If `retention_days` is omitted, backend uses `FORECAST_JOB_RETENTION_DAYS`.
+
+Possible `status` values: `queued`, `running`, `completed`, `failed`, `not_found`.
 
 Results:
 
@@ -226,6 +312,13 @@ Anomalies:
 
 ```bash
 curl -s -X POST "http://localhost:8000/api/v1/forecasting/anomalies/detect?product_id=1" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Promote selected forecast model results to demand plan:
+
+```bash
+curl -s -X POST "http://localhost:8000/api/v1/forecasting/promote?product_id=1&selected_model=arima&horizon=6&notes=Approved%20for%20next%20S%26OP" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -297,6 +390,45 @@ Complete (admin/executive):
 ```bash
 curl -s -X POST "http://localhost:8000/api/v1/sop-cycles/1/complete" \
   -H "Authorization: Bearer $TOKEN"
+```
+
+Executive scorecard (admin/executive):
+
+```bash
+curl -s "http://localhost:8000/api/v1/sop-cycles/1/executive-scorecard" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Example response shape:
+
+```json
+{
+  "cycle_id": 1,
+  "cycle_name": "March 2026 S&OP",
+  "period": "2026-03-01",
+  "scenario_reference": "Cycle-linked Scenario",
+  "service": {
+    "baseline_service_level": 96.0,
+    "scenario_service_level": 92.0,
+    "delta_service_level": -4.0
+  },
+  "cost": {
+    "inventory_carrying_cost": 12500.0,
+    "stockout_penalty_cost": 24000.0,
+    "composite_tradeoff_score": -1.8
+  },
+  "cash": {
+    "working_capital_delta": -8500.0,
+    "inventory_value_estimate": 210000.0
+  },
+  "risk": {
+    "open_exceptions": 12,
+    "high_risk_exceptions": 3,
+    "pending_recommendations": 7,
+    "backlog_risk": "medium"
+  },
+  "decision_signal": "review_required"
+}
 ```
 
 ### KPI

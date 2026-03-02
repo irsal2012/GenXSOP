@@ -17,8 +17,12 @@ from dateutil.relativedelta import relativedelta
 
 from app.ml.strategies import (
     MovingAverageStrategy,
+    EWMAStrategy,
     ExponentialSmoothingStrategy,
+    SeasonalNaiveStrategy,
+    ARIMAStrategy,
     ProphetStrategy,
+    LSTMStrategy,
     ForecastContext,
     BaseForecastStrategy,
 )
@@ -87,6 +91,13 @@ class TestMovingAverageStrategy:
         for item in result:
             assert item["upper_bound"] >= item["lower_bound"]
 
+    def test_confidence_interval_widens_with_horizon(self):
+        df = make_df(18, base=1000.0, noise=35.0)
+        result = MovingAverageStrategy().forecast(df, horizon=6, params={"trend_weight": 0.0})
+        widths = [item["upper_bound"] - item["lower_bound"] for item in result]
+        assert widths[-1] > widths[0]
+        assert all(widths[i] >= widths[i - 1] for i in range(1, len(widths)))
+
 
 # ── Exponential Smoothing Strategy ───────────────────────────────────────────
 
@@ -107,6 +118,70 @@ class TestExponentialSmoothingStrategy:
         assert len(result) == 6
         for item in result:
             assert item["predicted_qty"] >= 0
+
+
+class TestEWMAStrategy:
+
+    def test_model_id(self):
+        assert EWMAStrategy().model_id == "ewma"
+
+    def test_forecast_returns_horizon(self):
+        df = make_df(12)
+        result = EWMAStrategy().forecast(df, horizon=4)
+        assert len(result) == 4
+        assert all(item["predicted_qty"] >= 0 for item in result)
+
+    def test_confidence_interval_widens_with_horizon(self):
+        df = make_df(24, base=900.0, noise=40.0)
+        result = EWMAStrategy().forecast(df, horizon=6, params={"trend_weight": 0.0})
+        widths = [item["upper_bound"] - item["lower_bound"] for item in result]
+        assert widths[-1] > widths[0]
+        assert all(widths[i] >= widths[i - 1] for i in range(1, len(widths)))
+
+
+class TestBaseForecastIntervalScaling:
+
+    def test_horizon_scale_is_non_decreasing_and_capped(self):
+        strategy = MovingAverageStrategy()
+        scales = [strategy._horizon_interval_scale(i) for i in range(1, 60)]
+        assert all(scales[i] >= scales[i - 1] for i in range(1, len(scales)))
+        assert scales[0] == 1.0
+        assert scales[-1] <= 2.0
+
+
+class TestSeasonalNaiveStrategy:
+
+    def test_model_id(self):
+        assert SeasonalNaiveStrategy().model_id == "seasonal_naive"
+
+    def test_forecast_with_seasonality(self):
+        df = make_df(24)
+        result = SeasonalNaiveStrategy().forecast(df, horizon=6)
+        assert len(result) == 6
+
+
+class TestARIMAStrategy:
+
+    def test_model_id(self):
+        assert ARIMAStrategy().model_id == "arima"
+
+    def test_forecast_returns_horizon(self):
+        df = make_df(24)
+        result = ARIMAStrategy().forecast(df, horizon=5)
+        assert len(result) == 5
+        assert all(item["predicted_qty"] >= 0 for item in result)
+
+
+class TestLSTMStrategy:
+
+    def test_model_id(self):
+        assert LSTMStrategy().model_id == "lstm"
+
+    def test_falls_back_to_exp_smoothing_with_insufficient_data(self):
+        df = make_df(8)
+        result = LSTMStrategy().forecast(df, horizon=3)
+        assert len(result) == 3
+        assert all(item["predicted_qty"] >= 0 for item in result)
 
 
 # ── Forecast Context ──────────────────────────────────────────────────────────
@@ -144,6 +219,10 @@ class TestForecastModelFactory:
         s = ForecastModelFactory.create("exp_smoothing")
         assert isinstance(s, ExponentialSmoothingStrategy)
 
+    def test_create_lstm(self):
+        s = ForecastModelFactory.create("lstm")
+        assert isinstance(s, LSTMStrategy)
+
     def test_create_unknown_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown forecast model"):
             ForecastModelFactory.create("nonexistent_model")
@@ -157,8 +236,12 @@ class TestForecastModelFactory:
         models = ForecastModelFactory.list_models()
         ids = [m["id"] for m in models]
         assert "moving_average" in ids
+        assert "ewma" in ids
         assert "exp_smoothing" in ids
+        assert "seasonal_naive" in ids
+        assert "arima" in ids
         assert "prophet" in ids
+        assert "lstm" in ids
 
     def test_list_models_has_required_keys(self):
         models = ForecastModelFactory.list_models()

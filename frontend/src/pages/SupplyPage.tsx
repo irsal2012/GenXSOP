@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Plus, Search, Filter, CheckCircle, XCircle, Send } from 'lucide-react'
 import { supplyService, type SupplyFilters } from '@/services/supplyService'
+import { productService } from '@/services/productService'
 import { Card } from '@/components/common/Card'
 import { Button } from '@/components/common/Button'
 import { StatusBadge } from '@/components/common/StatusBadge'
 import { Modal } from '@/components/common/Modal'
 import { SkeletonTable } from '@/components/common/LoadingSpinner'
 import { formatPeriod, formatNumber } from '@/utils/formatters'
-import type { SupplyPlan, CreateSupplyPlanRequest } from '@/types'
+import type { SupplyPlan, CreateSupplyPlanRequest, Product, SupplyGapAnalysisItem } from '@/types'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '@/store/authStore'
 import { can } from '@/auth/permissions'
@@ -25,6 +26,15 @@ export function SupplyPage() {
   const [filters, setFilters] = useState<SupplyFilters>({ page: 1, page_size: 20 })
   const [showCreate, setShowCreate] = useState(false)
   const [actionLoading, setActionLoading] = useState<number | null>(null)
+  const [products, setProducts] = useState<Product[]>([])
+  const [gapAnalysis, setGapAnalysis] = useState<SupplyGapAnalysisItem[]>([])
+  const [gapLoading, setGapLoading] = useState(false)
+  const [gapProductId, setGapProductId] = useState<number | undefined>(undefined)
+  const [gapPeriod, setGapPeriod] = useState<string>('')
+  const [gapActionContext, setGapActionContext] = useState<{
+    existingPlanId?: number
+    recommendedIncreaseQty: number
+  } | null>(null)
   const [form, setForm] = useState<Partial<CreateSupplyPlanRequest>>({ location: 'Main Warehouse' })
 
   const load = async () => {
@@ -40,7 +50,45 @@ export function SupplyPage() {
     }
   }
 
+  const loadProducts = async () => {
+    try {
+      const first = await productService.getProducts({ page: 1, page_size: 100 })
+      let all = [...first.items]
+      for (let page = 2; page <= first.total_pages; page += 1) {
+        const next = await productService.getProducts({ page, page_size: 100 })
+        all = all.concat(next.items)
+      }
+      setProducts(all)
+    } catch {
+      // handled
+    }
+  }
+
+  const loadGapAnalysis = async () => {
+    setGapLoading(true)
+    try {
+      const period = gapPeriod ? `${gapPeriod}-01` : undefined
+      const data = await supplyService.getGapAnalysis({
+        period,
+        product_id: gapProductId,
+      })
+      setGapAnalysis(data)
+    } catch {
+      // handled
+      setGapAnalysis([])
+    } finally {
+      setGapLoading(false)
+    }
+  }
+
   useEffect(() => { load() }, [filters])
+  useEffect(() => { loadProducts() }, [])
+  useEffect(() => {
+    if (!gapPeriod && plans.length > 0) {
+      setGapPeriod(plans[0].period.slice(0, 7))
+    }
+  }, [plans, gapPeriod])
+  useEffect(() => { loadGapAnalysis() }, [gapProductId, gapPeriod])
 
   const handleAction = async (id: number, action: 'submit' | 'approve' | 'reject') => {
     setActionLoading(id)
@@ -63,14 +111,51 @@ export function SupplyPage() {
       return
     }
     try {
-      await supplyService.createPlan(form as CreateSupplyPlanRequest)
-      toast.success('Supply plan created')
+      if (gapActionContext?.existingPlanId) {
+        await supplyService.updatePlan(gapActionContext.existingPlanId, form)
+        toast.success('Supply plan updated to close gap')
+      } else {
+        await supplyService.createPlan(form as CreateSupplyPlanRequest)
+        toast.success('Supply plan created')
+      }
       setShowCreate(false)
+      setGapActionContext(null)
       setForm({ location: 'Main Warehouse' })
       load()
+      loadGapAnalysis()
     } catch {
       // handled
     }
+  }
+
+  const closeModal = () => {
+    setShowCreate(false)
+    setGapActionContext(null)
+  }
+
+  const handleCloseGap = (item: SupplyGapAnalysisItem) => {
+    const normalizedPeriod = item.period.slice(0, 10)
+    const existingPlan = plans.find(
+      (plan) => plan.product_id === item.product_id && plan.period.slice(0, 10) === normalizedPeriod,
+    )
+
+    const currentPlanned = Number(existingPlan?.planned_prod_qty ?? item.planned_production_qty ?? item.planned_supply_qty ?? 0)
+    const requiredIncrease = item.plan_gap_qty < 0 ? Math.abs(Number(item.plan_gap_qty)) : 0
+    const targetPlanned = currentPlanned + requiredIncrease
+
+    setForm({
+      product_id: item.product_id,
+      period: normalizedPeriod,
+      location: existingPlan?.location ?? 'Main Warehouse',
+      supplier_name: existingPlan?.supplier_name,
+      capacity_max: existingPlan?.capacity_max,
+      planned_prod_qty: Number(targetPlanned.toFixed(2)),
+    })
+    setGapActionContext({
+      existingPlanId: existingPlan?.id,
+      recommendedIncreaseQty: Number(requiredIncrease.toFixed(2)),
+    })
+    setShowCreate(true)
   }
 
   return (
@@ -81,7 +166,13 @@ export function SupplyPage() {
           <p className="text-sm text-gray-500 mt-0.5">{total} plans total</p>
         </div>
         {canWrite && (
-          <Button icon={<Plus />} onClick={() => setShowCreate(true)}>
+          <Button
+            icon={<Plus />}
+            onClick={() => {
+              setGapActionContext(null)
+              setShowCreate(true)
+            }}
+          >
             New Plan
           </Button>
         )}
@@ -182,15 +273,154 @@ export function SupplyPage() {
         )}
       </Card>
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Create Supply Plan"
+      <Card
+        title="Supply Gap Analysis"
+        subtitle="Plan Gap (Production vs Consensus) and Coverage Gap (Production + Inventory vs Consensus)"
+        actions={
+          <div className="flex items-end gap-2">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-600 mb-1">Period</label>
+              <input
+                type="month"
+                value={gapPeriod}
+                onChange={(e) => setGapPeriod(e.target.value)}
+                className="px-2.5 py-1.5 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-600 mb-1">Product</label>
+              <select
+                value={gapProductId ?? ''}
+                onChange={(e) => setGapProductId(e.target.value ? Number(e.target.value) : undefined)}
+                className="px-2.5 py-1.5 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[260px]"
+              >
+                <option value="">All Products</option>
+                {products.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    #{product.id} — {product.sku} — {product.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button variant="outline" size="sm" onClick={loadGapAnalysis}>
+              Refresh
+            </Button>
+          </div>
+        }
+      >
+        {gapLoading ? (
+          <SkeletonTable rows={6} cols={10} />
+        ) : gapAnalysis.length === 0 ? (
+          <div className="space-y-1">
+            <p className="text-sm text-gray-500">No gap analysis data found for the selected filters.</p>
+            <p className="text-xs text-gray-400">
+              This usually means there are no demand plans for
+              {gapPeriod ? ` ${gapPeriod}-01` : ' the selected period'}.
+              Try Period: <span className="font-medium">2026-01</span>, Product: <span className="font-medium">All Products</span>, then click Refresh.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto border border-gray-100 rounded-lg">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  {[
+                    'Product',
+                    'Period',
+                    'Consensus Demand',
+                    'Planned Production',
+                    'Actual Production',
+                    'Inventory Available',
+                    'Effective Supply',
+                    'Additional Prod Required',
+                    'Plan Gap',
+                    'Plan Gap %',
+                    'Actual Gap',
+                    'Actual Gap %',
+                    'Coverage Gap',
+                    'Coverage Gap %',
+                    'Status',
+                    'Action',
+                  ].map((h) => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {gapAnalysis.map((item) => (
+                  <tr key={`${item.product_id}-${item.period}`}>
+                    <td className="px-4 py-2.5 text-gray-800">
+                      <p className="font-medium">{item.product_name}</p>
+                      <p className="text-xs text-gray-500">{item.sku}</p>
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-700">{formatPeriod(item.period)}</td>
+                    <td className="px-4 py-2.5 tabular-nums">{formatNumber(item.consensus_demand_qty ?? item.demand_qty)}</td>
+                    <td className="px-4 py-2.5 tabular-nums">{formatNumber(item.planned_production_qty ?? item.planned_supply_qty)}</td>
+                    <td className="px-4 py-2.5 tabular-nums">{formatNumber(item.actual_production_qty)}</td>
+                    <td className="px-4 py-2.5 tabular-nums">{formatNumber(item.inventory_available_qty)}</td>
+                    <td className="px-4 py-2.5 tabular-nums font-medium text-gray-900">{formatNumber(item.effective_supply_qty)}</td>
+                    <td className="px-4 py-2.5 tabular-nums">{formatNumber(item.additional_prod_required_qty)}</td>
+                    <td className={`px-4 py-2.5 tabular-nums font-medium ${item.plan_gap_qty < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {formatNumber(item.plan_gap_qty)}
+                    </td>
+                    <td className={`px-4 py-2.5 tabular-nums ${item.plan_gap_pct < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {item.plan_gap_pct.toFixed(1)}%
+                    </td>
+                    <td className={`px-4 py-2.5 tabular-nums font-medium ${item.actual_gap_qty < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {formatNumber(item.actual_gap_qty)}
+                    </td>
+                    <td className={`px-4 py-2.5 tabular-nums ${item.actual_gap_pct < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {item.actual_gap_pct.toFixed(1)}%
+                    </td>
+                    <td className={`px-4 py-2.5 tabular-nums font-medium ${item.coverage_gap_qty < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {formatNumber(item.coverage_gap_qty)}
+                    </td>
+                    <td className={`px-4 py-2.5 tabular-nums ${item.coverage_gap_pct < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {item.coverage_gap_pct.toFixed(1)}%
+                    </td>
+                    <td className="px-4 py-2.5"><StatusBadge status={item.status} size="sm" /></td>
+                    <td className="px-4 py-2.5">
+                      {canWrite ? (
+                        <Button variant="outline" size="sm" onClick={() => handleCloseGap(item)}>
+                          {item.plan_gap_qty < 0
+                            ? (plans.some((plan) => plan.product_id === item.product_id && plan.period.slice(0, 10) === item.period.slice(0, 10))
+                              ? 'Adjust Plan'
+                              : 'Close Gap')
+                            : 'Adjust Plan'}
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-gray-400">No edit permission</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        isOpen={showCreate}
+        onClose={closeModal}
+        title={gapActionContext ? 'Close Gap — Supply Plan Adjustment' : 'Create Supply Plan'}
         footer={
           <>
-            <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={!canWrite}>Create Plan</Button>
+            <Button variant="outline" onClick={closeModal}>Cancel</Button>
+            <Button onClick={handleCreate} disabled={!canWrite}>
+              {gapActionContext?.existingPlanId ? 'Update Plan' : 'Create Plan'}
+            </Button>
           </>
         }
       >
         <div className="space-y-4">
+          {gapActionContext && (
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+              Recommended planned production increase: <span className="font-semibold">{formatNumber(gapActionContext.recommendedIncreaseQty)}</span>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">Product ID *</label>
             <input type="number" value={form.product_id ?? ''}

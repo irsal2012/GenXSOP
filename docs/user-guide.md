@@ -196,6 +196,15 @@ Navigate: **Sidebar → Forecasting**
 
 - `GET /api/v1/forecasting/models`
 
+Current models include:
+
+- Moving Average
+- EWMA
+- Exponential Smoothing
+- Seasonal Naive
+- ARIMA
+- Prophet
+
 ### Generate a forecast
 
 1. Pick a product.
@@ -206,6 +215,25 @@ Navigate: **Sidebar → Forecasting**
 API:
 
 - `POST /api/v1/forecasting/generate?product_id=1&horizon=6&model_type=prophet`
+
+### Promote forecast result to Demand Plan
+
+Use **Manage Forecast Results** to select a model per product and promote it into Demand Planning.
+
+1. Go to **Forecasting → Manage Results**.
+2. Locate the product + model row.
+3. Click **Promote**.
+4. Confirm action.
+
+API:
+
+- `POST /api/v1/forecasting/promote?product_id=1&selected_model=arima&horizon=6`
+
+What promotion does:
+
+- Applies selected model output into demand plans for the forecast periods.
+- Preserves planner control (human-in-the-loop decision).
+- Stores promotion context in plan notes/version history.
 
 ### View results
 

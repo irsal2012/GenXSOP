@@ -22,6 +22,7 @@ If you’re new to the codebase, start here:
 - **User Guide (UI walkthrough):** [`docs/user-guide.md`](docs/user-guide.md)
 - **Developer / API Guide:** [`docs/api-guide.md`](docs/api-guide.md)
 - **Docs index:** [`docs/README.md`](docs/README.md)
+- **Forecasting GenXAI enhancements:** [`docs/forecasting-genxai-enhancements.md`](docs/forecasting-genxai-enhancements.md)
 
 ## 🧰 API tooling
 
@@ -93,12 +94,45 @@ cp .env.example .env
 
 # Run the server
 python run.py
+
+# Optional: enforce migration-only startup behavior
+# export AUTO_CREATE_TABLES=false
 ```
 
 The API will be available at:
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
 - **Health**: http://localhost:8000/health
+
+### Production DB safety notes
+
+- Set `ENVIRONMENT=production` in production deployments.
+- Use PostgreSQL (SQLite is blocked in production mode).
+- Set a non-default `SECRET_KEY`.
+- Set `AUTO_CREATE_TABLES=false` and apply schema changes via Alembic migrations.
+
+Run preflight check before deployment:
+
+```bash
+cd backend
+python scripts/db_preflight.py
+```
+
+Run migration governance gate (CI/local):
+
+```bash
+cd backend
+bash scripts/ci_migration_gate.sh
+```
+
+Backup + restore verification helper:
+
+```bash
+cd backend
+SOURCE_DATABASE_URL='postgresql://user:pass@host:5432/genxsop' \
+RESTORE_DATABASE_URL='postgresql://user:pass@host:5432/genxsop_restore_check' \
+bash scripts/backup_restore_runbook.sh
+```
 
 ### Seed Sample Data
 

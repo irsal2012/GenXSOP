@@ -12,7 +12,11 @@ from app.ml.strategies import (
     BaseForecastStrategy,
     MovingAverageStrategy,
     ExponentialSmoothingStrategy,
+    EWMAStrategy,
+    SeasonalNaiveStrategy,
+    ARIMAStrategy,
     ProphetStrategy,
+    LSTMStrategy,
     ForecastContext,
 )
 
@@ -29,8 +33,12 @@ class ForecastModelFactory:
     # Registry maps model_id → strategy class (OCP: add new entries, don't modify)
     _registry: Dict[str, Type[BaseForecastStrategy]] = {
         "moving_average": MovingAverageStrategy,
+        "ewma": EWMAStrategy,
         "exp_smoothing": ExponentialSmoothingStrategy,
+        "seasonal_naive": SeasonalNaiveStrategy,
+        "arima": ARIMAStrategy,
         "prophet": ProphetStrategy,
+        "lstm": LSTMStrategy,
     }
 
     @classmethod

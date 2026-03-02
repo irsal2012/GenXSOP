@@ -7,6 +7,7 @@ export type AppModule =
   | 'dashboard'
   | 'demand'
   | 'supply'
+  | 'production_scheduling'
   | 'inventory'
   | 'forecasting'
   | 'scenarios'
@@ -23,6 +24,7 @@ export type Permission =
   | 'scenario.write'
   | 'scenario.approve'
   | 'forecast.generate'
+  | 'forecast.consensus.approve'
   | 'inventory.update'
   | 'kpi.manage'
   | 'products.manage'
@@ -48,6 +50,7 @@ const MODULE_ACCESS: Record<AppModule, UserRole[]> = {
 
   demand: ['admin', 'executive', 'demand_planner', 'supply_planner', 'sop_coordinator'],
   supply: ['admin', 'executive', 'supply_planner', 'sop_coordinator'],
+  production_scheduling: ['admin', 'executive', 'supply_planner', 'sop_coordinator'],
   inventory: ['admin', 'executive', 'inventory_manager', 'supply_planner', 'sop_coordinator'],
   forecasting: ['admin', 'executive', 'demand_planner', 'supply_planner', 'finance_analyst', 'sop_coordinator'],
   scenarios: ['admin', 'executive', 'demand_planner', 'supply_planner', 'finance_analyst', 'sop_coordinator'],
@@ -67,6 +70,7 @@ const PERMISSIONS: Record<Permission, UserRole[]> = {
   'scenario.approve': ['admin', 'executive'],
 
   'forecast.generate': ['admin', 'demand_planner', 'supply_planner', 'finance_analyst', 'sop_coordinator'],
+  'forecast.consensus.approve': ['admin', 'executive', 'sop_coordinator'],
 
   'inventory.update': ['admin', 'inventory_manager', 'supply_planner'],
   'kpi.manage': ['admin', 'executive'],

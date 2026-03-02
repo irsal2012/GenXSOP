@@ -10,6 +10,8 @@ from app.routers import (
     kpi,
     forecasting,
     dashboard,
+    integrations,
+    production_scheduling,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "kpi",
     "forecasting",
     "dashboard",
+    "integrations",
+    "production_scheduling",
 ]

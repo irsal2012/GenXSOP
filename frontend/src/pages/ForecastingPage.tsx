@@ -1,48 +1,275 @@
 import { useEffect, useState } from 'react'
-import { Brain, Play, TrendingUp, Target } from 'lucide-react'
+import { AlertTriangle, Brain, Check, Edit3, Eye, Play, TrendingUp, Target, Trash2, Upload } from 'lucide-react'
 import { forecastService } from '@/services/forecastService'
+import { demandService } from '@/services/demandService'
+import { productService } from '@/services/productService'
 import { Card } from '@/components/common/Card'
 import { Button } from '@/components/common/Button'
 import { KPICard } from '@/components/common/KPICard'
 import { Modal } from '@/components/common/Modal'
 import { SkeletonTable } from '@/components/common/LoadingSpinner'
+import { StageTabs } from '@/components/forecasting/StageTabs'
 import { formatPeriod, formatNumber, formatPercent } from '@/utils/formatters'
-import type { Forecast, ForecastAccuracy, GenerateForecastRequest } from '@/types'
+import type {
+  Forecast,
+  ForecastAccuracy,
+  ForecastConsensus,
+  ForecastDriftAlert,
+  ForecastModelComparisonItem,
+  GenerateForecastRequest,
+  ForecastModelType,
+  Product,
+  DemandPlan,
+} from '@/types'
 import toast from 'react-hot-toast'
 import { useAuthStore } from '@/store/authStore'
 import { can } from '@/auth/permissions'
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 const MODEL_TYPES = [
   { value: 'moving_average', label: 'Moving Average' },
+  { value: 'ewma', label: 'EWMA' },
   { value: 'exp_smoothing', label: 'Exponential Smoothing' },
+  { value: 'seasonal_naive', label: 'Seasonal Naive' },
   { value: 'arima', label: 'ARIMA' },
   { value: 'prophet', label: 'Prophet' },
-  { value: 'ml_ensemble', label: 'ML Ensemble' },
+  { value: 'lstm', label: 'LSTM (PyTorch)' },
 ]
+
+const MODEL_TYPE_VALUES = new Set(MODEL_TYPES.map((m) => m.value))
+
+const FORECAST_STAGES = [
+  { key: 'stage1', label: '1. Historical' },
+  { key: 'stage2', label: '2. Backtesting' },
+  { key: 'stage3', label: '3. Model Setup' },
+  { key: 'stage4', label: '4. Forecast View' },
+  { key: 'stage5', label: '5. Manage Results' },
+] as const
+
+const PARAMETER_GRID_EXAMPLE = `{
+  "moving_average": [
+    { "window": 3 },
+    { "window": 6 }
+  ],
+  "ewma": [
+    { "alpha": 0.2 },
+    { "alpha": 0.5 }
+  ],
+  "exp_smoothing": [
+    { "alpha": 0.3, "beta": 0.1 },
+    { "alpha": 0.5, "beta": 0.2 }
+  ],
+  "seasonal_naive": [
+    { "season_length": 12 }
+  ],
+  "arima": [
+    { "p": 1, "d": 1, "q": 1 },
+    { "p": 2, "d": 1, "q": 2 }
+  ],
+  "prophet": [
+    { "changepoint_prior_scale": 0.05, "seasonality_mode": "additive" },
+    { "changepoint_prior_scale": 0.1, "seasonality_mode": "multiplicative" }
+  ],
+  "lstm": [
+    { "lookback_window": 12, "hidden_size": 32, "num_layers": 1, "dropout": 0.1, "epochs": 120, "learning_rate": 0.01 },
+    { "lookback_window": 18, "hidden_size": 64, "num_layers": 2, "dropout": 0.2, "epochs": 180, "learning_rate": 0.005 }
+  ]
+}`
+
+const MODEL_PARAMETER_EXAMPLES: Record<string, Record<string, unknown>> = {
+  moving_average: { window: 6 },
+  ewma: { alpha: 0.35 },
+  exp_smoothing: { alpha: 0.3, beta: 0.1 },
+  seasonal_naive: { season_length: 12 },
+  arima: { p: 1, d: 1, q: 1 },
+  prophet: { changepoint_prior_scale: 0.05, seasonality_mode: 'additive' },
+  lstm: { lookback_window: 12, hidden_size: 32, num_layers: 1, dropout: 0.1, epochs: 120, learning_rate: 0.01 },
+}
+
+type ForecastStageKey = typeof FORECAST_STAGES[number]['key']
 
 export function ForecastingPage() {
   const { user } = useAuthStore()
   const canGenerate = can(user?.role, 'forecast.generate')
+  const canApproveConsensus = can(user?.role, 'forecast.consensus.approve')
 
   const [forecasts, setForecasts] = useState<Forecast[]>([])
   const [accuracy, setAccuracy] = useState<ForecastAccuracy[]>([])
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [showGenerate, setShowGenerate] = useState(false)
+  const [driftAlerts, setDriftAlerts] = useState<ForecastDriftAlert[]>([])
+  const [modelComparison, setModelComparison] = useState<ForecastModelComparisonItem[]>([])
+  const [modelComparisonFlags, setModelComparisonFlags] = useState<string[]>([])
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonError, setComparisonError] = useState<string | null>(null)
+  const [backtestParameterGridText, setBacktestParameterGridText] = useState<string>('')
+  const [selectedBacktestModel, setSelectedBacktestModel] = useState<string>('')
+  const [comparisonParams, setComparisonParams] = useState({
+    test_months: 6,
+    min_train_months: 6,
+  })
+  const [consensusRecords, setConsensusRecords] = useState<ForecastConsensus[]>([])
+  const [showConsensusModal, setShowConsensusModal] = useState(false)
+  const [savingConsensus, setSavingConsensus] = useState(false)
+  const [consensusModalMode, setConsensusModalMode] = useState<'fresh' | 'edit'>('fresh')
+  const [consensusForm, setConsensusForm] = useState({
+    period: '',
+    baseline_qty: 0,
+    sales_override_qty: 0,
+    marketing_uplift_qty: 0,
+    finance_adjustment_qty: 0,
+    constraint_cap_qty: '',
+    status: 'draft' as ForecastConsensus['status'],
+    notes: '',
+  })
+  const [latestGeneratedForecasts, setLatestGeneratedForecasts] = useState<Forecast[]>([])
+  const [products, setProducts] = useState<Product[]>([])
+  const [selectedProductId, setSelectedProductId] = useState<number | undefined>(undefined)
+  const [lastGeneratedProductId, setLastGeneratedProductId] = useState<number | undefined>(undefined)
+  const [lastGeneratedRunAuditId, setLastGeneratedRunAuditId] = useState<number | undefined>(undefined)
+  const [selectedForecastRunAuditId, setSelectedForecastRunAuditId] = useState<number | undefined>(undefined)
+  const [selectedForecastModelType, setSelectedForecastModelType] = useState<string | undefined>(undefined)
+  const [historyRangeMonths, setHistoryRangeMonths] = useState(24)
+  const [historyPlans, setHistoryPlans] = useState<DemandPlan[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [form, setForm] = useState<Partial<GenerateForecastRequest>>({
-    model_type: 'ml_ensemble',
+    model_type: 'prophet',
     horizon_months: 6,
   })
+  const [generationModelParamsText, setGenerationModelParamsText] = useState<string>('')
+  const [activeStage, setActiveStage] = useState<ForecastStageKey>('stage1')
+
+  const selectedSetupModel = form.model_type ?? 'prophet'
+  const selectedModelExample = MODEL_PARAMETER_EXAMPLES[selectedSetupModel]
+  const selectedModelExampleText = selectedModelExample
+    ? JSON.stringify({ [selectedSetupModel]: [selectedModelExample] }, null, 2)
+    : '{}'
+
+  const parseJsonObject = (raw: string): Record<string, unknown> | undefined => {
+    const trimmed = raw.trim()
+    if (!trimmed) return undefined
+    const parsed = JSON.parse(trimmed)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('JSON must be an object')
+    }
+    return parsed as Record<string, unknown>
+  }
+
+  const normalizeParameterGrid = (
+    raw: string,
+    selectedModel?: string,
+  ): Record<string, Array<Record<string, unknown>>> | undefined => {
+    const parsed = parseJsonObject(raw)
+    if (!parsed) return undefined
+
+    const entries = Object.entries(parsed)
+    if (entries.length === 0) return {}
+
+    const normalized: Record<string, Array<Record<string, unknown>>> = {}
+
+    // Canonical format: { "ewma": [ {...}, {...} ] }
+    // Also accept { "ewma": {...} } and auto-wrap into an array.
+    let canonicalShape = true
+    for (const [modelId, value] of entries) {
+      if (!MODEL_TYPE_VALUES.has(modelId)) {
+        canonicalShape = false
+        break
+      }
+      if (Array.isArray(value)) {
+        if (!value.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+          throw new Error('Each parameter set must be a JSON object')
+        }
+        normalized[modelId] = value as Array<Record<string, unknown>>
+      } else if (value && typeof value === 'object') {
+        normalized[modelId] = [value as Record<string, unknown>]
+      } else {
+        throw new Error('Each model entry must be an object or array of objects')
+      }
+    }
+
+    if (canonicalShape) return normalized
+
+    // Convenience fallback: allow a single parameter object and map it
+    // to the currently selected model.
+    if (!selectedModel || !MODEL_TYPE_VALUES.has(selectedModel)) {
+      throw new Error('Parameter grid must be a model -> [params] object')
+    }
+    return { [selectedModel]: [parsed] }
+  }
+
+  const normalizeGenerationParams = (
+    raw: string,
+    selectedModel?: string,
+  ): Record<string, unknown> | undefined => {
+    const parsed = parseJsonObject(raw)
+    if (!parsed) return undefined
+
+    const keys = Object.keys(parsed)
+    const looksLikeModelMap = keys.length > 0 && keys.every((k) => MODEL_TYPE_VALUES.has(k))
+
+    if (!looksLikeModelMap) return parsed
+
+    const modelKey = selectedModel && MODEL_TYPE_VALUES.has(selectedModel)
+      ? selectedModel
+      : keys[0]
+    const selectedValue = parsed[modelKey]
+
+    if (selectedValue == null) {
+      throw new Error('Selected model not found in provided model parameter object')
+    }
+
+    if (Array.isArray(selectedValue)) {
+      const first = selectedValue[0]
+      if (!first || typeof first !== 'object' || Array.isArray(first)) {
+        throw new Error('Model parameter list must contain JSON objects')
+      }
+      return first as Record<string, unknown>
+    }
+
+    if (typeof selectedValue === 'object') {
+      return selectedValue as Record<string, unknown>
+    }
+
+    throw new Error('Selected model parameters must be a JSON object or array of objects')
+  }
 
   const load = async () => {
     setLoading(true)
     try {
-      const [fRes, aRes] = await Promise.all([
+      const [fRes, aRes, cRes] = await Promise.allSettled([
         forecastService.getResults({ page_size: 50 }),
         forecastService.getAccuracy(),
+        forecastService.getConsensus(),
       ])
-      setForecasts(fRes.items)
-      setAccuracy(aRes)
+
+      if (fRes.status === 'fulfilled') {
+        setForecasts(fRes.value.items)
+      }
+
+      if (aRes.status === 'fulfilled') {
+        setAccuracy(aRes.value)
+      }
+
+      if (cRes.status === 'fulfilled') {
+        setConsensusRecords(cRes.value)
+      }
+
+      try {
+        const drift = await forecastService.getDriftAlerts({ threshold_pct: 8, min_points: 6 })
+        setDriftAlerts(drift)
+      } catch {
+        setDriftAlerts([])
+      }
     } catch {
       // handled
     } finally {
@@ -50,19 +277,182 @@ export function ForecastingPage() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  const loadProducts = async () => {
+    try {
+      // Backend max page_size is 100
+      const res = await productService.getProducts({ page_size: 100 })
+      setProducts(res.items)
+    } catch {
+      setProducts([])
+    }
+  }
+
+  useEffect(() => {
+    load()
+    loadProducts()
+  }, [])
+
+  const chartProductId = lastGeneratedProductId ?? selectedProductId ?? form.product_id ?? forecasts[0]?.product_id
+  const chartProduct = chartProductId != null
+    ? products.find((p) => Number(p.id) === Number(chartProductId))
+    : undefined
+  const historicalSelectedProduct = selectedProductId != null
+    ? products.find((p) => Number(p.id) === Number(selectedProductId))
+    : undefined
+
+  const fallbackRunAuditId = [...forecasts]
+    .filter((f) => {
+      const productMatch = !chartProductId || Number(f.product_id) === Number(chartProductId)
+      const modelMatch = !selectedForecastModelType || f.model_type === selectedForecastModelType
+      return productMatch && modelMatch && f.run_audit_id != null
+    })
+    .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+    .map((f) => f.run_audit_id)
+    .filter((id): id is number => typeof id === 'number')
+    .slice(-1)[0]
+
+  const activeRunAuditId = lastGeneratedRunAuditId ?? selectedForecastRunAuditId ?? fallbackRunAuditId
+
+  useEffect(() => {
+    setForm((prev) => ({ ...prev, product_id: selectedProductId }))
+  }, [selectedProductId])
+
+  useEffect(() => {
+    const loadHistoryPlans = async () => {
+      if (!chartProductId) {
+        setHistoryPlans([])
+        return
+      }
+
+      setHistoryLoading(true)
+      try {
+        const periodTo = new Date()
+        const periodFrom = new Date(periodTo.getFullYear(), periodTo.getMonth() - (historyRangeMonths - 1), 1)
+        const history = await demandService.getPlans({
+          page_size: 100,
+          product_id: chartProductId,
+          period_from: periodFrom.toISOString().slice(0, 10),
+          period_to: periodTo.toISOString().slice(0, 10),
+        })
+
+        setHistoryPlans((history.items ?? []).sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime()))
+      } catch {
+        setHistoryPlans([])
+      } finally {
+        setHistoryLoading(false)
+      }
+    }
+
+    loadHistoryPlans()
+  }, [chartProductId, historyRangeMonths])
+
+  const runModelComparison = async (productId: number) => {
+    let parsedParameterGrid: Record<string, Array<Record<string, unknown>>> | undefined
+    try {
+      parsedParameterGrid = normalizeParameterGrid(backtestParameterGridText, selectedBacktestModel || form.model_type)
+      if (parsedParameterGrid) {
+        setBacktestParameterGridText(JSON.stringify(parsedParameterGrid, null, 2))
+      }
+    } catch {
+      setComparisonError('Parameter grid must be a valid JSON object (model_id -> [param objects]).')
+      setComparisonLoading(false)
+      return
+    }
+
+    setComparisonLoading(true)
+    setComparisonError(null)
+    try {
+      const res = await forecastService.getModelComparison({
+        product_id: productId,
+        test_months: comparisonParams.test_months,
+        min_train_months: comparisonParams.min_train_months,
+        parameter_grid: parsedParameterGrid,
+        include_parameter_results: true,
+      })
+      setModelComparison(res.models ?? [])
+      setSelectedBacktestModel(res.models?.[0]?.model_type ?? '')
+      setModelComparisonFlags(res.data_quality_flags ?? [])
+    } catch {
+      setModelComparison([])
+      setSelectedBacktestModel('')
+      setModelComparisonFlags([])
+      setComparisonError('Not enough historical actuals to run model comparison yet.')
+    } finally {
+      setComparisonLoading(false)
+    }
+  }
+
+  const formatParameterGridForDisplay = (modelType: string, params: Record<string, unknown>) => (
+    JSON.stringify({ [modelType]: [params] }, null, 2)
+  )
+
+  useEffect(() => {
+    if (!selectedProductId) {
+      setModelComparison([])
+      setModelComparisonFlags([])
+      setComparisonError(null)
+      return
+    }
+    runModelComparison(selectedProductId)
+  }, [selectedProductId, comparisonParams.test_months, comparisonParams.min_train_months])
 
   const handleGenerate = async () => {
     if (!form.product_id) {
       toast.error('Please enter a product ID')
       return
     }
+    const generatedProductId = form.product_id
+    let parsedModelParams: Record<string, unknown> | undefined
+    try {
+      parsedModelParams = normalizeGenerationParams(generationModelParamsText, form.model_type)
+    } catch {
+      toast.error('Model parameters must be a valid JSON object')
+      return
+    }
+
     setGenerating(true)
     try {
-      await forecastService.generateForecast(form as GenerateForecastRequest)
-      toast.success('Forecast generated successfully')
+      const generated = await forecastService.generateForecast({
+        ...(form as GenerateForecastRequest),
+        model_params: parsedModelParams,
+      })
+      setLatestGeneratedForecasts(generated.forecasts ?? [])
+      const runAuditId = generated.diagnostics?.run_audit_id
+      setLastGeneratedRunAuditId(runAuditId)
+      setSelectedForecastRunAuditId(runAuditId)
+
+      const generatedForProduct = (generated.forecasts ?? [])
+        .filter((f) => Number(f.product_id) === Number(generatedProductId))
+        .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+
+      const firstForecastPoint = generatedForProduct.length > 0 ? generatedForProduct[0] : undefined
+      if (firstForecastPoint?.period && runAuditId != null) {
+        try {
+          await forecastService.createConsensus({
+            forecast_run_audit_id: runAuditId,
+            product_id: generatedProductId,
+            period: firstForecastPoint.period,
+            baseline_qty: Number(firstForecastPoint.predicted_qty ?? 0),
+            sales_override_qty: 0,
+            marketing_uplift_qty: 0,
+            finance_adjustment_qty: 0,
+            constraint_cap_qty: null,
+            status: 'draft',
+            notes: 'Auto-created from latest forecast generation',
+          })
+          toast.success('Forecast generated and new consensus draft created')
+        } catch {
+          toast.success('Forecast generated successfully')
+        }
+      } else {
+        toast.success('Forecast generated successfully')
+      }
+
       setShowGenerate(false)
-      load()
+      setSelectedProductId(generatedProductId)
+      setLastGeneratedProductId(generatedProductId)
+      await load()
+      setActiveStage('stage4')
     } catch {
       // handled
     } finally {
@@ -70,13 +460,457 @@ export function ForecastingPage() {
     }
   }
 
+  const groupedForecastModels = Array.from(
+    forecasts.reduce((acc, f) => {
+      const key = `${f.product_id}::${f.model_type}`
+      if (!acc.has(key)) acc.set(key, [])
+      acc.get(key)!.push(f)
+      return acc
+    }, new Map<string, Forecast[]>()),
+  ).map(([key, items]) => {
+    const [productIdRaw, modelType] = key.split('::')
+    const productId = Number(productIdRaw)
+    const sorted = [...items].sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+    const sample = sorted[0]
+    return {
+      product_id: productId,
+      model_type: modelType,
+      product_name: sample?.product?.name ?? `#${productId}`,
+      count: sorted.length,
+      period_from: sorted[0]?.period,
+      period_to: sorted[sorted.length - 1]?.period,
+    }
+  }).sort((a, b) => {
+    const byProduct = a.product_name.localeCompare(b.product_name)
+    if (byProduct !== 0) return byProduct
+    return a.model_type.localeCompare(b.model_type)
+  })
+
+  const handleDeleteForecastGroup = async (productId: number, productName: string) => {
+    if (!confirm(`Delete all forecast results for ${productName}? This action cannot be undone.`)) return
+    try {
+      const res = await forecastService.deleteResultsByProduct(productId)
+      toast.success(
+        `Deleted ${res.forecasts_deleted} forecast result(s) and ${res.consensus_deleted} consensus record(s) for ${productName}`,
+      )
+      await load()
+    } catch {
+      // handled
+    }
+  }
+
+  const handleViewForecastResult = (productId: number, modelType: string) => {
+    const viewRunAuditId = [...forecasts]
+      .filter((f) => (
+        Number(f.product_id) === Number(productId)
+        && f.model_type === modelType
+        && f.run_audit_id != null
+      ))
+      .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+      .map((f) => f.run_audit_id)
+      .filter((id): id is number => typeof id === 'number')
+      .slice(-1)[0]
+
+    setSelectedProductId(productId)
+    setLastGeneratedProductId(productId)
+    setSelectedForecastRunAuditId(viewRunAuditId)
+    setSelectedForecastModelType(modelType)
+    setActiveStage('stage4')
+  }
+
+  const handlePromoteForecastResult = async (productId: number, modelType: string) => {
+    if (!confirm(`Promote model ${modelType.replace(/_/g, ' ')} for product #${productId} to Demand Plan?`)) return
+    try {
+      const res = await forecastService.promoteForecastResults({
+        product_id: productId,
+        selected_model: modelType as ForecastModelType,
+        horizon_months: form.horizon_months ?? 6,
+      })
+      toast.success(`Promoted ${res.records_promoted} period(s) to Demand Plan`)
+    } catch {
+      // handled
+    }
+  }
+
+  const getSeedBaselineFromForecast = (productId: number, period: string): number => {
+    const monthKey = period.slice(0, 7)
+    const pointsForProduct = [...latestGeneratedForecasts, ...forecasts]
+      .filter((f) => Number(f.product_id) === Number(productId))
+      .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+
+    const exactMonthPoint = pointsForProduct.find((f) => f.period.slice(0, 7) === monthKey)
+    if (exactMonthPoint?.predicted_qty != null) return Number(exactMonthPoint.predicted_qty)
+
+    // Fallback to the nearest available future forecast point for the same product.
+    const nextPoint = pointsForProduct.find((f) => new Date(f.period).getTime() >= new Date(period).getTime())
+    if (nextPoint?.predicted_qty != null) return Number(nextPoint.predicted_qty)
+
+    // Last fallback: latest available predicted quantity.
+    const latestPoint = pointsForProduct.length > 0 ? pointsForProduct[pointsForProduct.length - 1] : null
+    if (latestPoint?.predicted_qty != null) return Number(latestPoint.predicted_qty)
+
+    return 0
+  }
+
+  const openConsensusModal = (mode: 'fresh' | 'edit' = 'fresh') => {
+    const targetProductId = chartProductId ?? selectedProductId
+    if (!targetProductId) {
+      toast.error('Select a product first')
+      return
+    }
+
+    setConsensusModalMode(mode)
+
+    const hasFreshGeneratedForecast =
+      mode === 'fresh'
+      && Number(targetProductId) === Number(lastGeneratedProductId)
+      && latestGeneratedForecasts.length > 0
+
+    if (hasFreshGeneratedForecast) {
+      const generatedForProduct = [...latestGeneratedForecasts]
+        .filter((f) => Number(f.product_id) === Number(targetProductId))
+        .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+
+      const basePoint = generatedForProduct.length > 0 ? generatedForProduct[0] : undefined
+      const period = basePoint?.period ?? new Date().toISOString().slice(0, 10)
+      const baseline = basePoint?.predicted_qty != null
+        ? Number(basePoint.predicted_qty)
+        : getSeedBaselineFromForecast(targetProductId, period)
+
+      setConsensusForm({
+        period,
+        baseline_qty: baseline,
+        sales_override_qty: 0,
+        marketing_uplift_qty: 0,
+        finance_adjustment_qty: 0,
+        constraint_cap_qty: '',
+        status: 'draft',
+        notes: '',
+      })
+      setShowConsensusModal(true)
+      return
+    }
+
+    const sortedExisting = [...selectedConsensus]
+      .filter((c) => Number(c.product_id) === Number(targetProductId))
+      .sort((a, b) => {
+        const byPeriod = new Date(a.period).getTime() - new Date(b.period).getTime()
+        if (byPeriod !== 0) return byPeriod
+        return a.version - b.version
+      })
+    const existing = sortedExisting.length > 0 ? sortedExisting[sortedExisting.length - 1] : undefined
+    const defaultPeriod = existing?.period ?? new Date().toISOString().slice(0, 10)
+    const seededBaseline = existing?.baseline_qty ?? getSeedBaselineFromForecast(targetProductId, defaultPeriod)
+
+    setConsensusForm({
+      period: defaultPeriod,
+      baseline_qty: seededBaseline,
+      sales_override_qty: existing?.sales_override_qty ?? 0,
+      marketing_uplift_qty: existing?.marketing_uplift_qty ?? 0,
+      finance_adjustment_qty: existing?.finance_adjustment_qty ?? 0,
+      constraint_cap_qty: existing?.constraint_cap_qty != null ? String(existing.constraint_cap_qty) : '',
+      status: existing?.status ?? 'draft',
+      notes: existing?.notes ?? '',
+    })
+    setShowConsensusModal(true)
+  }
+
+  const handleSaveConsensus = async () => {
+    const targetProductId = chartProductId ?? selectedProductId
+    if (!targetProductId) {
+      toast.error('Select a product first')
+      return
+    }
+    if (!consensusForm.period) {
+      toast.error('Period is required')
+      return
+    }
+    if (!activeRunAuditId) {
+      toast.error('No forecast run selected for consensus')
+      return
+    }
+
+    const samePeriodRows = [...consensusRecords]
+      .filter((c) => (
+        Number(c.product_id) === Number(targetProductId)
+        && Number(c.forecast_run_audit_id) === Number(activeRunAuditId)
+        && c.period === consensusForm.period
+      ))
+      .sort((a, b) => b.version - a.version)
+    const samePeriodLatest = samePeriodRows.length > 0 ? samePeriodRows[0] : undefined
+
+    setSavingConsensus(true)
+    try {
+      const payload = {
+        baseline_qty: Number(consensusForm.baseline_qty || 0),
+        sales_override_qty: Number(consensusForm.sales_override_qty || 0),
+        marketing_uplift_qty: Number(consensusForm.marketing_uplift_qty || 0),
+        finance_adjustment_qty: Number(consensusForm.finance_adjustment_qty || 0),
+        constraint_cap_qty: consensusForm.constraint_cap_qty === '' ? null : Number(consensusForm.constraint_cap_qty),
+        status: consensusForm.status,
+        notes: consensusForm.notes || undefined,
+      }
+
+      if (consensusModalMode === 'edit' && samePeriodLatest) {
+        await forecastService.updateConsensus(samePeriodLatest.id, payload)
+        toast.success('Consensus updated')
+      } else {
+        await forecastService.createConsensus({
+          forecast_run_audit_id: activeRunAuditId,
+          product_id: targetProductId,
+          period: consensusForm.period,
+          ...payload,
+        })
+        toast.success('Consensus created')
+      }
+      setShowConsensusModal(false)
+      await load()
+    } catch {
+      // handled by interceptors
+    } finally {
+      setSavingConsensus(false)
+    }
+  }
+
+  const handleApproveConsensus = async () => {
+    if (!latestConsensus) return
+    setSavingConsensus(true)
+    try {
+      await forecastService.approveConsensus(latestConsensus.id, { notes: 'Approved from Forecasting UI' })
+      toast.success('Consensus approved')
+      await load()
+    } catch {
+      // handled by interceptors
+    } finally {
+      setSavingConsensus(false)
+    }
+  }
+
   const avgMape = accuracy.length > 0
     ? accuracy.reduce((s, a) => s + a.mape, 0) / accuracy.length
     : 0
 
+  const selectedBacktestModelRow = modelComparison.find((m) => m.model_type === selectedBacktestModel) ?? modelComparison[0]
+  const backtestChartData = (selectedBacktestModelRow?.series ?? []).map((p) => ({
+    period: formatPeriod(p.period),
+    actual_qty: Number(p.actual_qty),
+    predicted_qty: Number(p.predicted_qty),
+  }))
+
+  const draftPreConsensus = Math.max(
+    0,
+    Number(consensusForm.baseline_qty || 0)
+      + Number(consensusForm.sales_override_qty || 0)
+      + Number(consensusForm.marketing_uplift_qty || 0)
+      + Number(consensusForm.finance_adjustment_qty || 0),
+  )
+  const draftCap = consensusForm.constraint_cap_qty === ''
+    ? null
+    : Number(consensusForm.constraint_cap_qty)
+  const draftFinalConsensus = draftCap == null
+    ? draftPreConsensus
+    : Math.max(0, Math.min(draftPreConsensus, draftCap))
+
+  const selectedConsensus = [...consensusRecords]
+    .filter((c) => {
+      const productMatch = !chartProductId || Number(c.product_id) === Number(chartProductId)
+      if (!productMatch) return false
+      if (!activeRunAuditId) return true
+      return Number(c.forecast_run_audit_id) === Number(activeRunAuditId)
+    })
+    .sort((a, b) => {
+      const byPeriod = new Date(a.period).getTime() - new Date(b.period).getTime()
+      if (byPeriod !== 0) return byPeriod
+      return a.version - b.version
+    })
+
+  const latestConsensus = selectedConsensus.length > 0
+    ? selectedConsensus[selectedConsensus.length - 1]
+    : null
+
+  const selectedProductAccuracy = chartProductId
+    ? accuracy.filter((a) => Number(a.product_id) === Number(chartProductId))
+    : accuracy
+
+  const bestModelByScore = selectedProductAccuracy.length > 0
+    ? selectedProductAccuracy.reduce((best, current) => {
+      const bestScore = best.mape + (best.wape * 0.25)
+      const currentScore = current.mape + (current.wape * 0.25)
+      return currentScore < bestScore ? current : best
+    }, selectedProductAccuracy[0])
+    : null
+
+  const bestModelByScoreOverall = accuracy.length > 0
+    ? accuracy.reduce((best, current) => {
+      const bestScore = best.mape + (best.wape * 0.25)
+      const currentScore = current.mape + (current.wape * 0.25)
+      return currentScore < bestScore ? current : best
+    }, accuracy[0])
+    : null
+
+  const bestModelDisplay = bestModelByScore ?? bestModelByScoreOverall
+
   const bestModel = accuracy.length > 0
     ? accuracy.reduce((best, a) => a.mape < best.mape ? a : best, accuracy[0])
     : null
+
+  const historyChartData = historyPlans.map((p) => ({
+    period: formatPeriod(p.period),
+    actual_qty: p.actual_qty != null ? Number(p.actual_qty) : null,
+  }))
+
+  const historicalSeries = historyPlans.map((p) => ({
+    period: p.period,
+    // Historical line should represent true history only.
+    // Keep this strictly to actuals to avoid plotting forecast/consensus as history points.
+    historical_qty: p.actual_qty != null ? Number(p.actual_qty) : null,
+  }))
+
+  const forecastPoints = [...latestGeneratedForecasts, ...forecasts]
+    .filter((f) => {
+      const productMatch = !chartProductId || Number(f.product_id) === Number(chartProductId)
+      const modelMatch = !selectedForecastModelType || f.model_type === selectedForecastModelType
+      return productMatch && modelMatch
+    })
+    .sort((a, b) => new Date(a.period).getTime() - new Date(b.period).getTime())
+
+  const latestConsensusPrediction = latestConsensus
+    ? [...forecastPoints]
+      .reverse()
+      .find((p) => p.period.slice(0, 7) === latestConsensus.period.slice(0, 7) && p.predicted_qty != null)
+    : undefined
+
+  const latestConsensusVariance = (latestConsensus && latestConsensusPrediction?.predicted_qty != null)
+    ? Number(latestConsensus.final_consensus_qty) - Number(latestConsensusPrediction.predicted_qty)
+    : null
+
+  const latestConsensusVariancePct = (latestConsensusVariance != null
+    && latestConsensusPrediction?.predicted_qty != null
+    && Number(latestConsensusPrediction.predicted_qty) !== 0)
+    ? (latestConsensusVariance / Number(latestConsensusPrediction.predicted_qty)) * 100
+    : null
+
+  const latestConsensusDriverNet = latestConsensus
+    ? Number(latestConsensus.sales_override_qty)
+      + Number(latestConsensus.marketing_uplift_qty)
+      + Number(latestConsensus.finance_adjustment_qty)
+    : null
+
+  const latestConsensusCapImpact = latestConsensus
+    ? Number(latestConsensus.final_consensus_qty) - Number(latestConsensus.pre_consensus_qty)
+    : null
+
+  const dedupedForecastPoints = Array.from(
+    forecastPoints.reduce((acc, point) => {
+      const monthKey = point.period.slice(0, 7)
+      if (!acc.has(monthKey)) acc.set(monthKey, point)
+      return acc
+    }, new Map<string, Forecast>()),
+  ).map(([, v]) => v)
+
+  const forecastPointRows = dedupedForecastPoints.slice(-12)
+
+  const forecastModelUsed = dedupedForecastPoints.length > 0
+    ? dedupedForecastPoints[dedupedForecastPoints.length - 1].model_type.replace(/_/g, ' ')
+    : null
+
+  const chartDataMap = new Map<string, {
+    periodRaw: string
+    historical_qty: number | null
+    prediction_qty: number | null
+    lower_bound: number | null
+    upper_bound: number | null
+    consensus_qty: number | null
+  }>()
+
+  historicalSeries.forEach((h) => {
+    const key = h.period.slice(0, 7)
+    const current = chartDataMap.get(key)
+    chartDataMap.set(key, {
+      periodRaw: current?.periodRaw ?? h.period,
+      historical_qty: h.historical_qty,
+      prediction_qty: current?.prediction_qty ?? null,
+      lower_bound: current?.lower_bound ?? null,
+      upper_bound: current?.upper_bound ?? null,
+      consensus_qty: current?.consensus_qty ?? null,
+    })
+  })
+
+  dedupedForecastPoints.forEach((f) => {
+    const key = f.period.slice(0, 7)
+    const current = chartDataMap.get(key)
+    chartDataMap.set(key, {
+      periodRaw: f.period,
+      historical_qty: current?.historical_qty ?? null,
+      prediction_qty: f.predicted_qty != null ? Number(f.predicted_qty) : null,
+      lower_bound: f.lower_bound != null ? Number(f.lower_bound) : null,
+      upper_bound: f.upper_bound != null ? Number(f.upper_bound) : null,
+      consensus_qty: current?.consensus_qty ?? null,
+    })
+  })
+
+  const consensusSeries = Array.from(
+    selectedConsensus.reduce((acc, c) => {
+      const monthKey = c.period.slice(0, 7)
+      // Keep latest version for each period.
+      if (!acc.has(monthKey) || c.version >= (acc.get(monthKey)?.version ?? 0)) {
+        acc.set(monthKey, c)
+      }
+      return acc
+    }, new Map<string, ForecastConsensus>()),
+  ).map(([, v]) => v)
+
+  consensusSeries.forEach((c) => {
+    const key = c.period.slice(0, 7)
+    const current = chartDataMap.get(key)
+    chartDataMap.set(key, {
+      periodRaw: current?.periodRaw ?? c.period,
+      historical_qty: current?.historical_qty ?? null,
+      prediction_qty: current?.prediction_qty ?? null,
+      lower_bound: current?.lower_bound ?? null,
+      upper_bound: current?.upper_bound ?? null,
+      consensus_qty: c.final_consensus_qty != null ? Number(c.final_consensus_qty) : null,
+    })
+  })
+
+  const chartData = Array.from(chartDataMap.values())
+    .sort((a, b) => new Date(a.periodRaw).getTime() - new Date(b.periodRaw).getTime())
+    .map((row) => ({
+      period: formatPeriod(row.periodRaw),
+      historical_qty: row.historical_qty,
+      prediction_qty: row.prediction_qty,
+      lower_bound: row.lower_bound,
+      upper_bound: row.upper_bound,
+      consensus_qty: row.consensus_qty,
+    }))
+
+  const accuracyChartData = [...accuracy]
+    .sort((a, b) => a.mape - b.mape)
+    .map((a) => ({
+      model: a.model_type.replace(/_/g, ' '),
+      mape: a.mape,
+      wape: a.wape,
+      hit_rate: a.hit_rate,
+    }))
+
+  const stageEnabled: Record<ForecastStageKey, boolean> = {
+    stage1: true,
+    stage2: Boolean(selectedProductId),
+    stage3: Boolean(selectedProductId),
+    stage4: forecasts.length > 0,
+    stage5: true,
+  }
+
+  const stageStatus = (stage: ForecastStageKey): 'complete' | 'active' | 'locked' | 'ready' => {
+    if (activeStage === stage) return 'active'
+    if (!stageEnabled[stage]) return 'locked'
+    if (stage === 'stage1' && selectedProductId) return 'complete'
+    if (stage === 'stage2' && selectedProductId && (modelComparison.length > 0 || Boolean(comparisonError))) return 'complete'
+    if (stage === 'stage3' && selectedProductId && form.model_type && form.horizon_months) return 'complete'
+    if (stage === 'stage4' && forecasts.length > 0) return 'complete'
+    if (stage === 'stage5') return 'ready'
+    return 'ready'
+  }
 
   return (
     <div className="space-y-6">
@@ -85,110 +919,671 @@ export function ForecastingPage() {
           <h1 className="text-xl font-bold text-gray-900">AI Forecasting</h1>
           <p className="text-sm text-gray-500 mt-0.5">ML-powered demand forecasting</p>
         </div>
-        {canGenerate && (
-          <Button icon={<Play />} onClick={() => setShowGenerate(true)}>
-            Generate Forecast
-          </Button>
+      </div>
+
+      <StageTabs
+        stages={FORECAST_STAGES}
+        activeStage={activeStage}
+        stageEnabled={stageEnabled}
+        getStatus={stageStatus}
+        onSelect={setActiveStage}
+      />
+
+      {activeStage === 'stage1' && (
+      <Card title="Step 1 · Select Product & Review Historical Demand" subtitle="View actual demand before generating forecast">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Product</label>
+            <select
+              value={selectedProductId ?? ''}
+              onChange={(e) => setSelectedProductId(e.target.value ? Number(e.target.value) : undefined)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Select a product</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">History Range</label>
+            <select
+              value={historyRangeMonths}
+              onChange={(e) => setHistoryRangeMonths(Number(e.target.value))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value={6}>Last 6 months</option>
+              <option value={12}>Last 12 months</option>
+              <option value={24}>Last 24 months</option>
+            </select>
+          </div>
+        </div>
+
+        {!selectedProductId ? (
+          <p className="text-sm text-gray-500">Select a product to preview historical demand values.</p>
+        ) : historyLoading ? (
+          <SkeletonTable rows={5} cols={4} />
+        ) : historyChartData.length === 0 ? (
+          <p className="text-sm text-gray-500">No historical demand data found for this product and range.</p>
+        ) : (
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={historyChartData} margin={{ top: 16, right: 24, left: 8, bottom: 12 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="period" tickMargin={8} />
+                <YAxis width={56} />
+                <Tooltip formatter={(v) => (typeof v === 'number' ? formatNumber(v) : '—')} />
+                <Legend />
+                <Line type="monotone" dataKey="actual_qty" name="Actual Qty" stroke="#16a34a" strokeWidth={2} dot={false} connectNulls={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
-      </div>
+      </Card>
+      )}
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard title="Avg MAPE" value={formatPercent(avgMape)} icon={<Target className="h-4 w-4" />} color="blue"
-          subtitle="Mean Absolute % Error" />
-        <KPICard title="Best Model" value={bestModel?.model_type?.replace(/_/g, ' ') ?? '—'}
-          icon={<Brain className="h-4 w-4" />} color="emerald"
-          subtitle={bestModel ? `MAPE: ${formatPercent(bestModel.mape)}` : undefined} />
-        <KPICard title="Forecasts Generated" value={forecasts.length}
-          icon={<TrendingUp className="h-4 w-4" />} color="purple" />
-        <KPICard title="Models Evaluated" value={accuracy.length}
-          icon={<Brain className="h-4 w-4" />} color="indigo" />
-      </div>
+      {activeStage === 'stage2' && (
+      <Card title="Step 2 · Backtesting" subtitle="Compare model performance before selecting a forecasting model">
+        <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
+            <input
+              type="text"
+              readOnly
+              value={historicalSelectedProduct
+                ? `${historicalSelectedProduct.name} (${historicalSelectedProduct.sku})`
+                : selectedProductId
+                  ? `#${selectedProductId}`
+                  : ''}
+              placeholder="Select product in Step 1"
+              className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Backtest Window</label>
+            <select
+              value={comparisonParams.test_months}
+              onChange={(e) => setComparisonParams((prev) => ({ ...prev, test_months: Number(e.target.value) }))}
+              className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg"
+            >
+              <option value={3}>3 months</option>
+              <option value={6}>6 months</option>
+              <option value={9}>9 months</option>
+              <option value={12}>12 months</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Minimum Train Months</label>
+            <select
+              value={comparisonParams.min_train_months}
+              onChange={(e) => setComparisonParams((prev) => ({ ...prev, min_train_months: Number(e.target.value) }))}
+              className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg"
+            >
+              <option value={3}>3 months</option>
+              <option value={6}>6 months</option>
+              <option value={12}>12 months</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <Button
+              size="sm"
+              variant="outline"
+              loading={comparisonLoading}
+              onClick={() => selectedProductId && runModelComparison(selectedProductId)}
+              disabled={!selectedProductId}
+            >
+              Run Backtest
+            </Button>
+          </div>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Forecast Results */}
-        <Card title="Recent Forecasts" subtitle={`${forecasts.length} results`}>
-          {loading ? (
-            <SkeletonTable rows={6} cols={4} />
-          ) : forecasts.length === 0 ? (
-            <div className="text-center py-10 text-gray-400">
-              <Brain className="h-8 w-8 mx-auto mb-2 opacity-40" />
-              <p className="text-sm">No forecasts yet. Generate your first forecast.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100">
-                    {['Product', 'Period', 'Model', 'Predicted Qty', 'MAPE'].map((h) => (
-                      <th key={h} className="text-left pb-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+        <div className="mb-3">
+          <label className="block text-xs font-medium text-gray-700 mb-1">Parameter Grid (optional JSON)</label>
+          <textarea
+            rows={12}
+            value={backtestParameterGridText}
+            onChange={(e) => setBacktestParameterGridText(e.target.value)}
+            onBlur={() => {
+              try {
+                const normalized = normalizeParameterGrid(backtestParameterGridText, selectedBacktestModel || form.model_type)
+                if (normalized) {
+                  setBacktestParameterGridText(JSON.stringify(normalized, null, 2))
+                }
+              } catch {
+                // keep user input as-is until they fix JSON
+              }
+            }}
+            className="w-full min-h-[280px] px-2.5 py-2 text-xs border border-gray-300 rounded-lg font-mono"
+            placeholder={PARAMETER_GRID_EXAMPLE}
+          />
+          <p className="mt-1 text-[11px] text-gray-500">Format: model_id → array of parameter objects. Example includes all supported models; best parameter set is selected per model.</p>
+        </div>
+
+        {modelComparisonFlags.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {modelComparisonFlags.map((flag) => (
+              <span key={flag} className="text-[11px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">
+                {flag.replace(/_/g, ' ')}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {comparisonLoading ? (
+          <SkeletonTable rows={4} cols={4} />
+        ) : comparisonError ? (
+          <div className="text-center py-8 text-amber-700 text-sm">
+            {comparisonError}
+          </div>
+        ) : modelComparison.length === 0 ? (
+          <div className="text-center py-10 text-gray-400">
+            <p className="text-sm">No backtesting data available yet</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {selectedBacktestModelRow && backtestChartData.length > 0 && (
+              <div className="rounded-lg border border-gray-100 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <p className="text-xs text-gray-600">
+                    Backtest actual vs forecasted quantities · Model: <span className="font-semibold text-gray-900">{selectedBacktestModelRow.model_type.replace(/_/g, ' ')}</span>
+                  </p>
+                  <select
+                    value={selectedBacktestModelRow.model_type}
+                    onChange={(e) => setSelectedBacktestModel(e.target.value)}
+                    className="px-2 py-1 text-xs border border-gray-300 rounded-lg"
+                  >
+                    {modelComparison.map((m) => (
+                      <option key={m.model_type} value={m.model_type}>
+                        {m.model_type.replace(/_/g, ' ')}
+                      </option>
                     ))}
+                  </select>
+                </div>
+                <div className="mb-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <div className="rounded bg-blue-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-blue-600">MAPE</p>
+                    <p className="text-sm font-semibold text-blue-900">{formatPercent(selectedBacktestModelRow.mape)}</p>
+                  </div>
+                  <div className="rounded bg-sky-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sky-600">SMAPE</p>
+                    <p className="text-sm font-semibold text-sky-900">{formatPercent(selectedBacktestModelRow.smape)}</p>
+                  </div>
+                  <div className="rounded bg-indigo-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-indigo-600">RMSE</p>
+                    <p className="text-sm font-semibold text-indigo-900">{formatNumber(selectedBacktestModelRow.rmse)}</p>
+                  </div>
+                  <div className="rounded bg-violet-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-violet-600">NRMSE %</p>
+                    <p className="text-sm font-semibold text-violet-900">{formatPercent(selectedBacktestModelRow.nrmse_pct)}</p>
+                  </div>
+                  <div className="rounded bg-cyan-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-cyan-600">MDAE</p>
+                    <p className="text-sm font-semibold text-cyan-900">{formatNumber(selectedBacktestModelRow.mdae)}</p>
+                  </div>
+                  <div className="rounded bg-teal-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-teal-600">R²</p>
+                    <p className="text-sm font-semibold text-teal-900">{selectedBacktestModelRow.r2.toFixed(4)}</p>
+                  </div>
+                  <div className="rounded bg-emerald-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-emerald-600">Hit Rate</p>
+                    <p className="text-sm font-semibold text-emerald-900">{formatPercent(selectedBacktestModelRow.hit_rate)}</p>
+                  </div>
+                  <div className="rounded bg-amber-50 px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-amber-600">Score</p>
+                    <p className="text-sm font-semibold text-amber-900">{selectedBacktestModelRow.score.toFixed(2)}</p>
+                  </div>
+                </div>
+                {selectedBacktestModelRow.best_params && Object.keys(selectedBacktestModelRow.best_params).length > 0 && (
+                  <div className="mb-3 rounded bg-gray-50 px-2 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Best Params</p>
+                    <pre className="text-[11px] text-gray-700 whitespace-pre-wrap">{JSON.stringify(selectedBacktestModelRow.best_params, null, 2)}</pre>
+                  </div>
+                )}
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={backtestChartData} margin={{ top: 12, right: 16, left: 0, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="period" tickMargin={8} />
+                      <YAxis width={56} />
+                      <Tooltip formatter={(v) => (typeof v === 'number' ? formatNumber(v) : '—')} />
+                      <Legend />
+                      <Line type="monotone" dataKey="actual_qty" name="Actual Qty" stroke="#16a34a" strokeWidth={2} dot={false} connectNulls={false} />
+                      <Line type="monotone" dataKey="predicted_qty" name="Forecast Qty" stroke="#2563eb" strokeWidth={2} dot={false} connectNulls={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-lg border border-gray-100">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50">
+                    <th className="text-left px-2 py-2">Model</th>
+                    <th className="text-left px-2 py-2">Score</th>
+                    <th className="text-left px-2 py-2">MAPE</th>
+                    <th className="text-left px-2 py-2">SMAPE</th>
+                    <th className="text-left px-2 py-2">NRMSE %</th>
+                    <th className="text-left px-2 py-2">MDAE</th>
+                    <th className="text-left px-2 py-2">R²</th>
+                    <th className="text-left px-2 py-2">Best Params</th>
+                    <th className="text-left px-2 py-2">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {forecasts.slice(0, 10).map((f) => (
-                    <tr key={f.id} className="hover:bg-gray-50">
-                      <td className="py-2.5 font-medium text-gray-900 pr-3">
-                        {f.product?.name ?? `#${f.product_id}`}
+                <tbody>
+                  {modelComparison.map((m) => (
+                    <tr key={m.model_type} className="border-b border-gray-50">
+                      <td className="px-2 py-2">{m.model_type.replace(/_/g, ' ')}</td>
+                      <td className="px-2 py-2">{m.score.toFixed(2)}</td>
+                      <td className="px-2 py-2">{formatPercent(m.mape)}</td>
+                      <td className="px-2 py-2">{formatPercent(m.smape)}</td>
+                      <td className="px-2 py-2">{formatPercent(m.nrmse_pct)}</td>
+                      <td className="px-2 py-2">{formatNumber(m.mdae)}</td>
+                      <td className="px-2 py-2">{m.r2.toFixed(4)}</td>
+                      <td className="px-2 py-2">
+                        <pre className="text-[11px] whitespace-pre-wrap break-words text-gray-700 font-mono">
+                          {formatParameterGridForDisplay(m.model_type, (m.best_params ?? m.model_params ?? {}) as Record<string, unknown>)}
+                        </pre>
                       </td>
-                      <td className="py-2.5 text-gray-600 pr-3">{formatPeriod(f.period)}</td>
-                      <td className="py-2.5 pr-3">
-                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
-                          {f.model_type.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      <td className="py-2.5 tabular-nums pr-3">{formatNumber(f.predicted_qty)}</td>
-                      <td className="py-2.5 tabular-nums">
-                        {f.mape != null ? (
-                          <span className={f.mape < 10 ? 'text-emerald-600' : f.mape < 20 ? 'text-amber-600' : 'text-red-500'}>
-                            {formatPercent(f.mape)}
-                          </span>
-                        ) : '—'}
+                      <td className="px-2 py-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setForm((prev) => ({ ...prev, model_type: m.model_type as GenerateForecastRequest['model_type'] }))
+                            setGenerationModelParamsText(JSON.stringify(m.best_params ?? m.model_params ?? {}, null, 2))
+                            setActiveStage('stage3')
+                          }}
+                        >
+                          Use in setup
+                        </Button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </Card>
+          </div>
+        )}
+      </Card>
+      )}
 
-        {/* Model Accuracy */}
-        <Card title="Model Accuracy Comparison">
-          {accuracy.length === 0 ? (
-            <div className="text-center py-10 text-gray-400">
-              <p className="text-sm">No accuracy data available</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {accuracy.map((a) => (
-                <div key={`${a.product_id}-${a.model_type}`} className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium text-gray-700">
-                        {a.model_type.replace(/_/g, ' ')}
-                      </span>
-                      <span className="text-xs text-gray-500">MAPE: {formatPercent(a.mape)}</span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${a.mape < 10 ? 'bg-emerald-500' : a.mape < 20 ? 'bg-amber-500' : 'bg-red-500'}`}
-                        style={{ width: `${Math.min(100, 100 - a.mape)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-gray-500">Bias</p>
-                    <p className={`text-xs font-medium ${a.bias > 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-                      {a.bias > 0 ? '+' : ''}{a.bias.toFixed(1)}%
-                    </p>
-                  </div>
-                </div>
+      {activeStage === 'stage3' && (
+      <Card title="Step 3 · Model Setup" subtitle="Configure model inputs for forecast generation">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Model Type</label>
+            <select value={form.model_type ?? 'prophet'}
+              onChange={(e) => setForm((f) => ({ ...f, model_type: e.target.value as GenerateForecastRequest['model_type'] }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {MODEL_TYPES.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
               ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Forecast Horizon (months)</label>
+            <input type="number" min={1} max={24} value={form.horizon_months ?? 6}
+              onChange={(e) => setForm((f) => ({ ...f, horizon_months: Number(e.target.value) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Model Parameters (optional JSON)</label>
+            <textarea
+              rows={8}
+              value={generationModelParamsText}
+              onChange={(e) => setGenerationModelParamsText(e.target.value)}
+              className="w-full min-h-[180px] px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+              placeholder={selectedModelExampleText}
+            />
+            <p className="mt-1 text-[11px] text-gray-500">Format (same as Backtesting Parameter Grid): model_id → array of parameter objects. The selected model entry is applied for generation.</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button icon={<Play />} loading={generating} onClick={handleGenerate} disabled={!selectedProductId || !canGenerate}>
+            Generate Forecast
+          </Button>
+        </div>
+      </Card>
+      )}
+
+      {activeStage === 'stage4' && driftAlerts.length > 0 && (
+        <Card title="Forecast Drift Alerts" subtitle="Month-over-month accuracy degradation detected">
+          <div className="space-y-2">
+            {driftAlerts.slice(0, 5).map((a, idx) => (
+              <div key={`${a.product_id}-${a.model_type}-${idx}`} className="flex items-center justify-between p-3 rounded-lg border border-amber-200 bg-amber-50">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                  <p className="text-sm text-amber-900 truncate">
+                    Product #{a.product_id} · {a.model_type.replace(/_/g, ' ')} degraded by {formatPercent(a.degradation_pct)}
+                  </p>
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${a.severity === 'high' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {a.severity}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {activeStage === 'stage4' && (
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard title="Avg MAPE" value={formatPercent(avgMape)} icon={<Target className="h-4 w-4" />} color="blue"
+          subtitle="Mean Absolute % Error" />
+        <KPICard title="Best Model (Score)" value={bestModelDisplay?.model_type?.replace(/_/g, ' ') ?? '—'}
+          icon={<Brain className="h-4 w-4" />} color="emerald"
+          subtitle={bestModelDisplay
+            ? `Score: ${(bestModelDisplay.mape + (bestModelDisplay.wape * 0.25)).toFixed(2)} · Product #${bestModelDisplay.product_id}`
+            : undefined} />
+        <KPICard title="Forecasts Generated" value={forecasts.length}
+          icon={<TrendingUp className="h-4 w-4" />} color="purple" />
+        <KPICard title="Models Evaluated" value={accuracy.length}
+          icon={<Brain className="h-4 w-4" />} color="indigo" />
+      </div>
+      )}
+
+      {activeStage === 'stage4' && (
+      <Card title="Consensus Quantity Snapshot" subtitle="Latest cross-functional agreed demand value">
+        {!latestConsensus ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-gray-500">No consensus records available for selected product.</p>
+            <Button size="sm" variant="outline" icon={<Edit3 className="h-4 w-4" />} onClick={() => openConsensusModal('fresh')}>
+              Create
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <p className="text-xs text-gray-500">Period</p>
+                <p className="text-sm font-medium text-gray-900">{formatPeriod(latestConsensus.period)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Final Consensus</p>
+                <p className="text-sm font-semibold text-emerald-700">{formatNumber(latestConsensus.final_consensus_qty)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Pre-Consensus</p>
+                <p className="text-sm text-gray-900">{formatNumber(latestConsensus.pre_consensus_qty)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Status</p>
+                <p className="text-sm text-gray-900 capitalize">{latestConsensus.status}</p>
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-xs font-medium text-amber-900 mb-1">Variance Explanation (Latest Period)</p>
+              {latestConsensusPrediction?.predicted_qty == null ? (
+                <p className="text-xs text-amber-800">
+                  No matching forecast prediction found for this consensus period.
+                </p>
+              ) : (
+                <div className="space-y-1 text-xs text-amber-900">
+                  <p>
+                    Consensus ({formatNumber(Number(latestConsensus.final_consensus_qty))})
+                    {' '}− Prediction ({formatNumber(Number(latestConsensusPrediction.predicted_qty))})
+                    {' '}= <span className="font-semibold">{latestConsensusVariance != null ? formatNumber(latestConsensusVariance) : '—'}</span>
+                    {latestConsensusVariancePct != null ? ` (${formatPercent(latestConsensusVariancePct)})` : ''}
+                  </p>
+                  <p>
+                    Driver breakdown:
+                    {' '}Baseline {formatNumber(Number(latestConsensus.baseline_qty))}
+                    {' '}+ Sales {formatNumber(Number(latestConsensus.sales_override_qty))}
+                    {' '}+ Marketing {formatNumber(Number(latestConsensus.marketing_uplift_qty))}
+                    {' '}+ Finance {formatNumber(Number(latestConsensus.finance_adjustment_qty))}
+                    {' '}= Pre {formatNumber(Number(latestConsensus.pre_consensus_qty))}
+                  </p>
+                  <p>
+                    Net overrides vs baseline: <span className="font-semibold">{latestConsensusDriverNet != null ? formatNumber(latestConsensusDriverNet) : '—'}</span>
+                    {' '}· Cap impact: <span className="font-semibold">{latestConsensusCapImpact != null ? formatNumber(latestConsensusCapImpact) : '—'}</span>
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" icon={<Edit3 className="h-4 w-4" />} onClick={() => openConsensusModal('fresh')}>
+                New Version
+              </Button>
+              <Button
+                size="sm"
+                icon={<Check className="h-4 w-4" />}
+                loading={savingConsensus}
+                onClick={handleApproveConsensus}
+                disabled={!canApproveConsensus || latestConsensus.status === 'approved' || latestConsensus.status === 'frozen'}
+              >
+                Approve
+              </Button>
+            </div>
+            {!canApproveConsensus && (
+              <p className="text-xs text-amber-700">
+                Approve requires role: admin, executive, or sop_coordinator.
+              </p>
+            )}
+            {(latestConsensus.status === 'approved' || latestConsensus.status === 'frozen') && (
+              <p className="text-xs text-gray-500">
+                This consensus is already {latestConsensus.status}.
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
+      )}
+
+      {activeStage === 'stage4' && (
+      <Card title="Consensus History" subtitle="Latest consensus versions for selected product">
+        {selectedConsensus.length === 0 ? (
+          <p className="text-sm text-gray-500">No consensus history yet for selected product.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {['Period', 'Version', 'Pre-Consensus', 'Final Consensus', 'Status', 'Approved At'].map((h) => (
+                    <th key={h} className="text-left pb-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {[...selectedConsensus].reverse().slice(0, 10).map((c) => (
+                  <tr key={c.id} className="hover:bg-gray-50">
+                    <td className="py-2.5 text-gray-900">{formatPeriod(c.period)}</td>
+                    <td className="py-2.5 text-gray-700">v{c.version}</td>
+                    <td className="py-2.5 text-gray-700">{formatNumber(c.pre_consensus_qty)}</td>
+                    <td className="py-2.5 font-medium text-gray-900">{formatNumber(c.final_consensus_qty)}</td>
+                    <td className="py-2.5">
+                      <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full capitalize">{c.status}</span>
+                    </td>
+                    <td className="py-2.5 text-gray-600">{c.approved_at ? new Date(c.approved_at).toLocaleString() : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      )}
+
+      {activeStage === 'stage4' && (
+      <Card title="Best Model Recommendation" subtitle="Composite score = MAPE + 0.25 × WAPE">
+        {bestModelDisplay ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            <span className="font-semibold">Best model:</span> {bestModelDisplay.model_type.replace(/_/g, ' ')} ·
+            {' '}Score {(bestModelDisplay.mape + (bestModelDisplay.wape * 0.25)).toFixed(2)} ·
+            {' '}Product #{bestModelDisplay.product_id}
+            {!bestModelByScore && bestModelByScoreOverall ? ' (using overall data fallback)' : ''}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Accuracy appears after actual demand is recorded for forecasted months.</p>
+        )}
+      </Card>
+      )}
+
+      {activeStage === 'stage4' && selectedForecastModelType && (
+      <Card title="Viewing Filter" subtitle="Filtered from Manage Forecast Results">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-gray-700">
+            Showing forecast curve for model:{' '}
+            <span className="font-semibold text-gray-900">{selectedForecastModelType.replace(/_/g, ' ')}</span>
+          </p>
+          <Button variant="outline" onClick={() => setSelectedForecastModelType(undefined)}>
+            Show all models
+          </Button>
+        </div>
+      </Card>
+      )}
+
+      {activeStage === 'stage4' && (
+      <div className="grid grid-cols-1 gap-4">
+        <Card
+          title="Forecast Curve"
+          subtitle={`Historical + prediction + consensus with confidence interval${chartProductId ? ` · Product: ${chartProduct ? `${chartProduct.name} (${chartProduct.sku})` : `#${chartProductId}`}` : ''}${forecastModelUsed ? ` · Model: ${forecastModelUsed}` : ''}`}
+        >
+          <div className="mb-3 text-sm text-gray-700">
+            <span className="font-medium">Model used:</span>{' '}
+            <span className="text-gray-900">
+              {(selectedForecastModelType ?? (forecastModelUsed ? forecastModelUsed.replace(/ /g, '_') : undefined))
+                ? (selectedForecastModelType ?? forecastModelUsed)?.replace(/_/g, ' ')
+                : '—'}
+            </span>
+          </div>
+          {bestModelDisplay && (
+            <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              <span className="font-semibold">Best Model (Score):</span>{' '}
+              {bestModelDisplay.model_type.replace(/_/g, ' ')} · Score {(bestModelDisplay.mape + (bestModelDisplay.wape * 0.25)).toFixed(2)}
+            </div>
+          )}
+          {chartData.length === 0 ? (
+            <div className="text-center py-10 text-gray-400 text-sm">Select a product and generate forecast to visualize trend</div>
+          ) : (
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 16, right: 16, left: 0, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="period" tickMargin={8} />
+                  <YAxis width={56} />
+                  <Tooltip formatter={(v) => (typeof v === 'number' ? formatNumber(v) : '—')} />
+                  <Legend />
+                  <Line type="monotone" dataKey="upper_bound" stroke="#93c5fd" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Confidence Upper" connectNulls={false} />
+                  <Line type="monotone" dataKey="lower_bound" stroke="#93c5fd" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Confidence Lower" connectNulls={false} />
+                  <Line type="monotone" dataKey="historical_qty" stroke="#16a34a" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 4 }} name="Historical" connectNulls={false} />
+                  <Line type="monotone" dataKey="prediction_qty" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 4 }} name="Prediction" connectNulls={false} />
+                  <Line type="monotone" dataKey="consensus_qty" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 4 }} name="Consensus" connectNulls={false} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           )}
         </Card>
       </div>
+      )}
+
+      {activeStage === 'stage4' && (
+      <Card title="Forecast Point Details" subtitle="Historical and predicted points for selected/generated product">
+        {forecastPointRows.length === 0 ? (
+          <div className="text-center py-8 text-gray-400">
+            <p className="text-sm">No forecast points available for this product yet</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {['Period', 'Predicted', 'Lower', 'Upper'].map((h) => (
+                    <th key={h} className="text-left pb-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {forecastPointRows.map((p) => (
+                  <tr key={`point-${p.id}`} className="hover:bg-gray-50">
+                    <td className="py-2.5 text-gray-900">{formatPeriod(p.period)}</td>
+                    <td className="py-2.5 text-gray-700">{formatNumber(Number(p.predicted_qty ?? 0))}</td>
+                    <td className="py-2.5 text-gray-600">{p.lower_bound != null ? formatNumber(Number(p.lower_bound)) : '—'}</td>
+                    <td className="py-2.5 text-gray-600">{p.upper_bound != null ? formatNumber(Number(p.upper_bound)) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      )}
+
+      {activeStage === 'stage5' && (
+      <Card title="Step 5 · Manage Forecast Results" subtitle="All executed models, ordered by product">
+        {loading ? (
+          <SkeletonTable rows={6} cols={4} />
+        ) : forecasts.length === 0 ? (
+          <div className="text-center py-10 text-gray-400">
+            <Brain className="h-8 w-8 mx-auto mb-2 opacity-40" />
+            <p className="text-sm">No forecasts yet. Generate your first forecast.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {['Product', 'Model', 'Periods', 'Count', 'Actions'].map((h) => (
+                    <th key={h} className="text-left pb-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {groupedForecastModels.slice(0, 50).map((g) => (
+                  <tr key={`${g.product_id}-${g.model_type}`} className="hover:bg-gray-50">
+                    <td className="py-2.5 font-medium text-gray-900 pr-3">{g.product_name}</td>
+                    <td className="py-2.5 pr-3">
+                      <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
+                        {g.model_type?.replace(/_/g, ' ') ?? '—'}
+                      </span>
+                    </td>
+                    <td className="py-2.5 text-gray-600 pr-3">
+                      {g.period_from && g.period_to
+                        ? `${formatPeriod(g.period_from)} → ${formatPeriod(g.period_to)}`
+                        : '—'}
+                    </td>
+                    <td className="py-2.5 tabular-nums pr-3">{g.count}</td>
+                    <td className="py-2.5">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleViewForecastResult(g.product_id, g.model_type)}
+                          className="p-1.5 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                          title="View this forecast in Forecast View"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handlePromoteForecastResult(g.product_id, g.model_type)}
+                          className="p-1.5 rounded text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                          title="Promote this forecast model to Demand Plan"
+                          disabled={!canGenerate}
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteForecastGroup(g.product_id, g.product_name)}
+                          className="p-1.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          title="Delete all forecast results for this product"
+                          disabled={!canGenerate}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+      )}
+
+      {(activeStage !== 'stage1' && !selectedProductId) && (
+        <Card title="Stage Locked" subtitle="Select a product in Stage 1 first">
+          <p className="text-sm text-gray-500">Please go to Stage 1 and select a product to continue.</p>
+        </Card>
+      )}
 
       {/* Generate Modal */}
       <Modal isOpen={showGenerate} onClose={() => setShowGenerate(false)} title="Generate Forecast"
@@ -211,7 +1606,7 @@ export function ForecastingPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1.5">Model Type</label>
-            <select value={form.model_type ?? 'ml_ensemble'}
+            <select value={form.model_type ?? 'prophet'}
               onChange={(e) => setForm((f) => ({ ...f, model_type: e.target.value as GenerateForecastRequest['model_type'] }))}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
               {MODEL_TYPES.map((m) => (
@@ -228,6 +1623,106 @@ export function ForecastingPage() {
               className="w-full" />
             <div className="flex justify-between text-xs text-gray-400 mt-1">
               <span>1 month</span><span>24 months</span>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showConsensusModal}
+        onClose={() => setShowConsensusModal(false)}
+        title="Consensus Quantity"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setShowConsensusModal(false)}>Cancel</Button>
+            <Button loading={savingConsensus} onClick={handleSaveConsensus} disabled={!canGenerate}>Save</Button>
+          </>
+        }
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Period *</label>
+            <input
+              type="date"
+              value={consensusForm.period}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, period: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Status</label>
+            <select
+              value={consensusForm.status}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, status: e.target.value as ForecastConsensus['status'] }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            >
+              <option value="draft">draft</option>
+              <option value="proposed">proposed</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Baseline Qty</label>
+            <input
+              type="number"
+              value={consensusForm.baseline_qty}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, baseline_qty: Number(e.target.value) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Sales Override</label>
+            <input
+              type="number"
+              value={consensusForm.sales_override_qty}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, sales_override_qty: Number(e.target.value) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Marketing Uplift</label>
+            <input
+              type="number"
+              value={consensusForm.marketing_uplift_qty}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, marketing_uplift_qty: Number(e.target.value) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Finance Adjustment</label>
+            <input
+              type="number"
+              value={consensusForm.finance_adjustment_qty}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, finance_adjustment_qty: Number(e.target.value) }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Constraint Cap (optional)</label>
+            <input
+              type="number"
+              value={consensusForm.constraint_cap_qty}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, constraint_cap_qty: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">Notes</label>
+            <textarea
+              rows={3}
+              value={consensusForm.notes}
+              onChange={(e) => setConsensusForm((prev) => ({ ...prev, notes: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+          <div className="md:col-span-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
+            <p className="text-xs font-medium text-blue-800 mb-1">Live Calculation Preview</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+              <p className="text-blue-900">
+                Pre-Consensus: <span className="font-semibold">{formatNumber(draftPreConsensus)}</span>
+              </p>
+              <p className="text-blue-900">
+                Final Consensus: <span className="font-semibold">{formatNumber(draftFinalConsensus)}</span>
+              </p>
             </div>
           </div>
         </div>

@@ -25,6 +25,17 @@ class SOPCycleCreate(SOPCycleBase):
 
 class SOPCycleUpdate(BaseModel):
     cycle_name: Optional[str] = None
+    period: Optional[date] = None
+    step_1_due_date: Optional[date] = None
+    step_1_owner_id: Optional[int] = None
+    step_2_due_date: Optional[date] = None
+    step_2_owner_id: Optional[int] = None
+    step_3_due_date: Optional[date] = None
+    step_3_owner_id: Optional[int] = None
+    step_4_due_date: Optional[date] = None
+    step_4_owner_id: Optional[int] = None
+    step_5_due_date: Optional[date] = None
+    step_5_owner_id: Optional[int] = None
     notes: Optional[str] = None
     decisions: Optional[str] = None
     action_items: Optional[str] = None
@@ -54,3 +65,39 @@ class SOPCycleListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class SOPExecutiveServiceView(BaseModel):
+    baseline_service_level: float
+    scenario_service_level: float
+    delta_service_level: float
+
+
+class SOPExecutiveCostView(BaseModel):
+    inventory_carrying_cost: float
+    stockout_penalty_cost: float
+    composite_tradeoff_score: float
+
+
+class SOPExecutiveCashView(BaseModel):
+    working_capital_delta: float
+    inventory_value_estimate: float
+
+
+class SOPExecutiveRiskView(BaseModel):
+    open_exceptions: int
+    high_risk_exceptions: int
+    pending_recommendations: int
+    backlog_risk: str
+
+
+class SOPExecutiveScorecard(BaseModel):
+    cycle_id: int
+    cycle_name: str
+    period: date
+    scenario_reference: Optional[str] = None
+    service: SOPExecutiveServiceView
+    cost: SOPExecutiveCostView
+    cash: SOPExecutiveCashView
+    risk: SOPExecutiveRiskView
+    decision_signal: str

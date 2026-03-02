@@ -3,6 +3,7 @@ Custom Exception Hierarchy — Single Responsibility Principle (SRP)
 Each exception has a single, clear purpose.
 """
 from fastapi import HTTPException, status
+from typing import Union
 
 
 class GenXSOPException(Exception):
@@ -17,7 +18,7 @@ class GenXSOPException(Exception):
 
 class EntityNotFoundException(GenXSOPException):
     """Raised when a requested entity does not exist in the database."""
-    def __init__(self, entity: str, entity_id: int | str):
+    def __init__(self, entity: str, entity_id: Union[int, str]):
         super().__init__(
             message=f"{entity} with id '{entity_id}' not found.",
             code="NOT_FOUND",

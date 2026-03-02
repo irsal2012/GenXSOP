@@ -1,5 +1,21 @@
 import api from './api'
-import type { Forecast, GenerateForecastRequest, ForecastAccuracy, PaginatedResponse } from '@/types'
+import type {
+  Forecast,
+  GenerateForecastRequest,
+  ForecastAccuracy,
+  PaginatedResponse,
+  GenerateForecastResponse,
+  ForecastRecommendationResponse,
+  ForecastDiagnostics,
+  ForecastDriftAlert,
+  ForecastModelComparisonResponse,
+  ForecastPromoteResponse,
+  ForecastModelType,
+  ForecastConsensus,
+  CreateForecastConsensusRequest,
+  UpdateForecastConsensusRequest,
+  ApproveForecastConsensusRequest,
+} from '@/types'
 
 /**
  * Forecasting API normalization
@@ -17,24 +33,15 @@ import type { Forecast, GenerateForecastRequest, ForecastAccuracy, PaginatedResp
  * So we normalize responses here to keep the UI stable.
  */
 
-type GenerateForecastResponse = {
-  product_id: number
-  model_type?: string | null
-  horizon: number
-  forecasts: Array<{
-    period: string
-    predicted_qty: number
-    lower_bound?: number | null
-    upper_bound?: number | null
-    confidence?: number | null
-    mape?: number | null
-  }>
-}
-
 type AccuracyResponseItem = {
   model_type: string
   avg_mape: number
   sample_count: number
+}
+
+export type GenerateForecastResult = {
+  forecasts: Forecast[]
+  diagnostics?: ForecastDiagnostics
 }
 
 function normalizeForecastsArray(items: Forecast[]): PaginatedResponse<Forecast> {
@@ -48,37 +55,51 @@ function normalizeForecastsArray(items: Forecast[]): PaginatedResponse<Forecast>
 }
 
 function normalizeAccuracy(items: AccuracyResponseItem[]): ForecastAccuracy[] {
-  // Forecasting page expects mape as a % number and bias fields etc.
-  // Backend currently only provides avg_mape + sample_count, so fill the rest with 0.
   return items.map((i) => ({
     product_id: 0,
     model_type: i.model_type,
     mape: i.avg_mape,
+    smape: 0,
+    wape: 0,
     bias: 0,
     rmse: 0,
+    nrmse_pct: 0,
     mae: 0,
+    mdae: 0,
+    r2: 0,
     hit_rate: 0,
     period_count: i.sample_count,
+    sample_count: i.sample_count,
+    avg_mape: i.avg_mape,
   }))
 }
 
 export const forecastService = {
-  async generateForecast(data: GenerateForecastRequest): Promise<Forecast[]> {
-    // backend expects query params (product_id, horizon, model_type), not JSON body
+  async getRecommendation(data: Pick<GenerateForecastRequest, 'product_id' | 'model_type'>): Promise<ForecastRecommendationResponse> {
+    const res = await api.post<ForecastRecommendationResponse>('/forecasting/recommendation', null, {
+      params: {
+        product_id: data.product_id,
+        model_type: data.model_type,
+      },
+    })
+    return res.data
+  },
+
+  async generateForecast(data: GenerateForecastRequest): Promise<GenerateForecastResult> {
     const res = await api.post<GenerateForecastResponse>('/forecasting/generate', null, {
       params: {
         product_id: data.product_id,
         horizon: data.horizon_months ?? 6,
         model_type: data.model_type,
+        model_params: data.model_params ? JSON.stringify(data.model_params) : undefined,
       },
     })
 
-    // Transform backend response into Forecast[] used in UI
-    const modelType = (res.data.model_type ?? data.model_type ?? 'ml_ensemble') as Forecast['model_type']
-    return (res.data.forecasts ?? []).map((f, idx) => ({
+    const modelType = (res.data.model_type ?? data.model_type ?? 'moving_average') as Forecast['model_type']
+    const forecasts = (res.data.forecasts ?? []).map((f, idx) => ({
       id: -1 * (idx + 1),
       product_id: res.data.product_id,
-      model_type: modelType,
+      model_type: (f.model_type ?? modelType) as Forecast['model_type'],
       period: f.period,
       predicted_qty: f.predicted_qty,
       lower_bound: f.lower_bound ?? undefined,
@@ -90,7 +111,15 @@ export const forecastService = {
       training_date: undefined,
       created_at: new Date().toISOString(),
       product: undefined,
+      selection_reason: res.data.diagnostics?.selection_reason,
+      advisor_confidence: res.data.diagnostics?.advisor_confidence,
+      advisor_enabled: res.data.diagnostics?.advisor_enabled,
+      fallback_used: res.data.diagnostics?.fallback_used,
+      model_params: res.data.diagnostics?.selected_model_params,
+      warnings: res.data.diagnostics?.warnings,
     }))
+
+    return { forecasts, diagnostics: res.data.diagnostics }
   },
 
   async getResults(params?: { product_id?: number; model_type?: string; page?: number; page_size?: number }): Promise<PaginatedResponse<Forecast>> {
@@ -106,17 +135,85 @@ export const forecastService = {
     return res.data
   },
 
+  async deleteResult(id: number): Promise<void> {
+    await api.delete(`/forecasting/results/${id}`)
+  },
+
+  async deleteResultsByProduct(productId: number): Promise<{
+    product_id: number
+    deleted: number
+    forecasts_deleted: number
+    consensus_deleted: number
+  }> {
+    const res = await api.delete<{
+      product_id: number
+      deleted: number
+      forecasts_deleted: number
+      consensus_deleted: number
+    }>(`/forecasting/results/by-product/${productId}`)
+    return res.data
+  },
+
   async getModels() {
     const res = await api.get('/forecasting/models')
+    return res.data
+  },
+
+  async promoteForecastResults(data: { product_id: number; selected_model: ForecastModelType; horizon_months?: number; notes?: string }): Promise<ForecastPromoteResponse> {
+    const res = await api.post<ForecastPromoteResponse>('/forecasting/promote', null, {
+      params: {
+        product_id: data.product_id,
+        selected_model: data.selected_model,
+        horizon: data.horizon_months ?? 6,
+        notes: data.notes,
+      },
+    })
     return res.data
   },
 
   async getAccuracy(params?: { product_id?: number; model_type?: string }): Promise<ForecastAccuracy[]> {
     const res = await api.get<AccuracyResponseItem[] | ForecastAccuracy[]>('/forecasting/accuracy', { params })
     const data = res.data as any
-    // If backend already matches frontend shape, pass through.
-    if (Array.isArray(data) && data.length > 0 && 'mape' in data[0]) return data
+    if (Array.isArray(data) && data.length > 0 && 'mape' in data[0]) {
+      return data.map((row: any) => ({
+        ...row,
+        smape: row.smape ?? 0,
+        wape: row.wape ?? 0,
+        nrmse_pct: row.nrmse_pct ?? 0,
+        mdae: row.mdae ?? 0,
+        r2: row.r2 ?? 0,
+        sample_count: row.sample_count ?? row.period_count,
+        avg_mape: row.avg_mape ?? row.mape,
+      }))
+    }
     return normalizeAccuracy((data as AccuracyResponseItem[]) ?? [])
+  },
+
+  async getDriftAlerts(params?: { threshold_pct?: number; min_points?: number }): Promise<ForecastDriftAlert[]> {
+    const res = await api.get<ForecastDriftAlert[]>('/forecasting/accuracy/drift-alerts', { params })
+    return res.data ?? []
+  },
+
+  async getModelComparison(params: {
+    product_id: number
+    test_months?: number
+    min_train_months?: number
+    models?: string[]
+    parameter_grid?: Record<string, Array<Record<string, unknown>>>
+    include_parameter_results?: boolean
+  }): Promise<ForecastModelComparisonResponse> {
+    const queryParams = {
+      ...params,
+      parameter_grid: params.parameter_grid ? JSON.stringify(params.parameter_grid) : undefined,
+      include_parameter_results: params.include_parameter_results ?? false,
+    }
+    const res = await api.get<ForecastModelComparisonResponse>('/forecasting/model-comparison', { params: queryParams })
+    return {
+      ...res.data,
+      models: [...(res.data.models ?? [])].sort((a, b) => a.rank - b.rank),
+      data_quality_flags: res.data.data_quality_flags ?? [],
+      parameter_grid_used: res.data.parameter_grid_used ?? {},
+    }
   },
 
   async detectAnomalies(productId: number) {
@@ -127,6 +224,32 @@ export const forecastService = {
 
   async getAnomalies(params?: { product_id?: number }) {
     const res = await api.get('/forecasting/anomalies', { params })
+    return res.data
+  },
+
+  async getConsensus(params?: {
+    product_id?: number
+    forecast_run_audit_id?: number
+    status?: 'draft' | 'proposed' | 'approved' | 'frozen'
+    period_from?: string
+    period_to?: string
+  }): Promise<ForecastConsensus[]> {
+    const res = await api.get<ForecastConsensus[]>('/forecasting/consensus', { params })
+    return res.data ?? []
+  },
+
+  async createConsensus(data: CreateForecastConsensusRequest): Promise<ForecastConsensus> {
+    const res = await api.post<ForecastConsensus>('/forecasting/consensus', data)
+    return res.data
+  },
+
+  async updateConsensus(consensusId: number, data: UpdateForecastConsensusRequest): Promise<ForecastConsensus> {
+    const res = await api.patch<ForecastConsensus>(`/forecasting/consensus/${consensusId}`, data)
+    return res.data
+  },
+
+  async approveConsensus(consensusId: number, data?: ApproveForecastConsensusRequest): Promise<ForecastConsensus> {
+    const res = await api.post<ForecastConsensus>(`/forecasting/consensus/${consensusId}/approve`, data ?? {})
     return res.data
   },
 }
