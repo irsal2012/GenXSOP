@@ -61,6 +61,7 @@ export function InventoryPage() {
   const [serviceLevelMethod, setServiceLevelMethod] = useState<InventoryServiceLevelMethod>('analytical')
   const [targetServiceLevel, setTargetServiceLevel] = useState(0.95)
   const [serviceLevelLoading, setServiceLevelLoading] = useState(false)
+  const [selectedServiceLevelInventoryId, setSelectedServiceLevelInventoryId] = useState<number | null>(null)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [optimizationLoading, setOptimizationLoading] = useState(false)
@@ -110,9 +111,11 @@ export function InventoryPage() {
       setAssessment(asmt)
 
       if (res.items.length > 0) {
+        setSelectedServiceLevelInventoryId(res.items[0].id)
         await loadServiceLevelAnalytics(res.items[0].id)
       } else {
         setServiceLevelAnalytics(null)
+        setSelectedServiceLevelInventoryId(null)
       }
     } catch {
       // handled
@@ -213,6 +216,22 @@ export function InventoryPage() {
   const lowCount = items.filter((i) => i.status === 'low').length
   const excessCount = items.filter((i) => i.status === 'excess').length
   const totalValue = items.reduce((sum, i) => sum + (i.valuation ?? 0), 0)
+
+  const formatInventoryScopeLabel = (inv: Inventory) => {
+    const name = inv.product?.name ?? `Product #${inv.product_id}`
+    const sku = inv.product?.sku ? ` (${inv.product.sku})` : ''
+    return `${name}${sku} — ${inv.location}`
+  }
+
+  const selectedServiceLevelItem = selectedServiceLevelInventoryId
+    ? items.find((i) => i.id === selectedServiceLevelInventoryId) ?? null
+    : null
+
+  const serviceLevelScopeLabel = selectedServiceLevelItem
+    ? formatInventoryScopeLabel(selectedServiceLevelItem)
+    : items[0]
+      ? formatInventoryScopeLabel(items[0])
+      : null
 
   const statusChartData = [
     { name: 'Normal', value: healthSummary?.normal_count ?? items.filter((i) => i.status === 'normal').length, color: '#10b981' },
@@ -499,8 +518,37 @@ export function InventoryPage() {
         </div>
       </Card>
 
-      <Card title="Service Level Under Uncertainty" subtitle="Probability-based CSL/fill-rate analytics from stock-demand distribution">
+      <Card
+        title="Service Level Under Uncertainty"
+        subtitle={serviceLevelScopeLabel
+          ? `Probability-based CSL/fill-rate analytics from stock-demand distribution • Scope: ${serviceLevelScopeLabel}`
+          : 'Probability-based CSL/fill-rate analytics from stock-demand distribution'}
+      >
         <div className="flex flex-wrap items-end gap-2 mb-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">SKU / Location</label>
+            <select
+              value={String(selectedServiceLevelInventoryId ?? '')}
+              onChange={(e) => {
+                const nextId = Number(e.target.value)
+                if (!Number.isFinite(nextId)) return
+                setSelectedServiceLevelInventoryId(nextId)
+                void loadServiceLevelAnalytics(nextId)
+              }}
+              className="text-sm border border-gray-200 rounded-lg px-3 py-2 min-w-[260px]"
+              disabled={items.length === 0}
+            >
+              {items.length === 0 ? (
+                <option value="">No SKUs</option>
+              ) : (
+                items.map((item) => (
+                  <option key={item.id} value={String(item.id)}>
+                    {formatInventoryScopeLabel(item)}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">Method</label>
             <select
@@ -529,7 +577,7 @@ export function InventoryPage() {
             size="sm"
             loading={serviceLevelLoading}
             onClick={() => {
-              const id = items[0]?.id
+              const id = selectedServiceLevelInventoryId ?? items[0]?.id
               if (!id) return
               void loadServiceLevelAnalytics(id)
             }}
